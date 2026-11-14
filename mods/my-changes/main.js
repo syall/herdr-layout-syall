@@ -468,9 +468,14 @@ export default class Changes extends View {
 
   diffRow({ kind, number, text }, t) {
     if (kind === "@") return div().w_full().px(12).h(20).flex_none().truncate().bg(t.raised).text_color(t.dim).child(text);
-    return h_flex().w_full().h(20).flex_none().gap(10).when(kind === "+", (e) => e.bg(t.ansi2 + "18")).when(kind === "-", (e) => e.bg(t.ansi1 + "18"))
-      .child(div().w(30).flex_none().text_right().text_color(t.dim).child(number === undefined ? "" : String(number)))
-      .child(div().flex_1().min_w(0).truncate().child(text));
+    // my-changes: added and removed lines are told apart three ways: a stronger tint, a solid
+    // bar at the left edge, and a + or − sign in the line's colour.
+    const tone = kind === "+" ? t.ansi2 : kind === "-" ? t.ansi1 : null;
+    return h_flex().w_full().h(20).flex_none().gap(8).when(Boolean(tone), (e) => e.bg(tone + "38"))
+      .child(div().w(3).h_full().flex_none().when(Boolean(tone), (e) => e.bg(tone)))
+      .child(div().w(30).flex_none().text_right().text_color(tone ?? t.dim).child(number === undefined ? "" : String(number)))
+      .child(div().w(8).flex_none().font_semibold().text_color(tone ?? t.dim).child(kind === "+" ? "+" : kind === "-" ? "−" : ""))
+      .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(text));
   }
 
   render(cx) {

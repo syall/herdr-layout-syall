@@ -3,7 +3,30 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView, InputState, Input } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, shared, setShared } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, shared, setShared, terminals, layout, run } from "herdr";
+
+// my-files: a folder that belongs to a Project Agent task links back to it. The task opens in
+// the Project panel (shared "project-agent.show"); its live workers (shared
+// "project-agent.workers": { space: { address: { task, role } } }) open in the Agents view.
+function openTask(space, task) {
+  setShared("project-agent.show", { space, task, at: Date.now() });
+  run("layout.select", { stack: "panel-body", child: "project-agent" });
+}
+function liveWorkers(space, task) {
+  const crew = (shared("project-agent.workers") ?? {})[space] ?? {};
+  return Object.entries(crew).filter(([address, w]) => w.task === task && terminals().some((x) => x.address === address && x.state === "live"))
+    .map(([address, w]) => ({ address, role: w.role ?? "worker", status: terminals().find((x) => x.address === address)?.status }));
+}
+function showAgent(address) {
+  const find = (n, id) => { if (n?.id === id) return n; for (const c of n?.children ?? []) { const f = find(c, id); if (f) return f; } return null; };
+  const tree = JSON.parse(JSON.stringify(layout() ?? {})), view = find(tree, "agents-view");
+  if (!view) { run("terminal.peek", { terminal: address }); return; }
+  let live = find(tree, "agents-live");
+  if (!live) { live = { id: "agents-live", type: "block" }; view.children = [...(view.children ?? []), live]; }
+  live.content = { terminal: address }; live.hidden = false;
+  run("layout.set", { layout: tree });
+  run("layout.select", { stack: "panel-body", child: "agents-view" });
+}
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
@@ -244,6 +267,16 @@ export default class Files extends View {
     // my-files: shortcuts other mods offer for this space (shared "my-files.places"), such as a
     // Project Agent's evidence folders. Shown above the tree; a click pins the view to that folder.
     const spaceId = location().space, spots = (shared("my-files.places") ?? {})[spaceId] ?? [];
+    // The task and live agents of a folder, as small buttons.
+    const links = (task, key) => !task ? [] : [
+      div().id(`ftask-${key}`).flex_none().px(5).h(18).flex().items_center().rounded(5).bg(t.raised).text_size(10.5).text_color(t.muted).cursor_pointer()
+        .hover(s => s.text_color(t.foreground)).tooltip(`Open task ${task} in the Project panel`)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => { cx.stop_propagation(); openTask(spaceId, task); }).child(`${task} →`),
+      ...liveWorkers(spaceId, task).slice(0, 3).map((w, i) => h_flex().id(`fagent-${key}-${i}`).flex_none().h(18).px(5).gap(4).items_center().rounded(5).border_1().border_color(t.border)
+        .text_size(10.5).text_color(t.muted).cursor_pointer().hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip(`Show the ${w.role} (${w.address})`)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => { cx.stop_propagation(); showAgent(w.address); })
+        .child(div().size(6).rounded(3).bg(t[w.status] ?? t.idle)).child(`${w.role} ↗`)),
+    ];
     const shortcuts = () => {
       const groups = [...new Set(spots.map((p) => p.group ?? "Shortcuts"))];
       return groups.flatMap((group) => {
@@ -255,10 +288,11 @@ export default class Files extends View {
           ...(folded ? [] : spots.filter((p) => (p.group ?? "Shortcuts") === group).map((p, i) =>
             h_flex().id(`place-${group}-${i}`).h(28).flex_none().pl(20).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
               .when(pin?.path === p.path && pinnedHere, el => el.bg(t.selected))
-              .on_click(() => setShared("my-files.root", { space: spaceId, path: p.path, label: p.label.split(" · ")[0], file: null, at: Date.now() }))
+              .on_click(() => setShared("my-files.root", { space: spaceId, path: p.path, label: p.label.split(" · ")[0], file: null, task: p.task ?? null, at: Date.now() }))
               .child(svg("mods/my-files/folder.svg").size(14).flex_none().text_color(t.muted))
               .child(div().flex_none().max_w(230).truncate().child(p.label))
-              .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.dim).child(p.detail ?? "")))),
+              .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.dim).child(p.detail ?? ""))
+              .children(links(p.task, `${group}-${i}`)))),
           div().h(1).mx(8).my(4).flex_none().bg(t.border),
         ];
       });
@@ -281,6 +315,8 @@ export default class Files extends View {
           .child(this.rendered ? "Source" : "Preview")))
         .when(Boolean(location().label), el => el.child(div().id("files-unpin").flex_none().px(7).h(22).flex().items_center().rounded(6).bg(t.selected).text_size(11.5).text_color(t.muted).cursor_pointer()
           .hover(s => s.text_color(t.foreground)).on_click(() => setShared("my-files.root", null)).child(`${location().label} ×`)))
+        // The pinned folder's task and its live agents.
+        .when(pinnedHere && Boolean(pin?.task), el => el.children(links(pin.task, "pin")))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? "")))
       .when(!this.file || (beside && !this.sidebarHidden), el => el.child(h_flex().flex_none().px(8).py(6).gap(6).items_center().border_b(1).border_color(t.border)
         .child(Input.new(this.filterInput).flex_1().h(28).px(8).rounded(7).border_1().border_color(t.input).bg(t.background).text_size(12.5).text_color(t.foreground))

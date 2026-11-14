@@ -26,7 +26,7 @@ function location() {
 // live elsewhere). A folder that is itself a repository is just that one. Dot-folders and
 // build output are skipped; four levels deep is enough for workspace/worktrees/<name>/src/<repo>.
 const SCAN = `
-emit() { b=$(git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null); n=$(git --no-optional-locks -C "$1" status --porcelain 2>/dev/null | wc -l | tr -d ' '); printf 'R\\t%s\\t%s\\t%s\\n' "$1" "$b" "$n"; }
+emit() { b=$(git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null); n=$(git --no-optional-locks -C "$1" status --porcelain 2>/dev/null | wc -l | tr -d ' '); a=$(git -C "$1" rev-list --count HEAD --not --remotes 2>/dev/null || echo 0); printf 'R\\t%s\\t%s\\t%s\\t%s\\n' "$1" "$b" "$n" "$a"; }
 scan() {
   if [ -e "$1/.git" ]; then
     emit "$1"
@@ -91,7 +91,9 @@ export default class Changes extends View {
     this.refresh(cx);
     this.findPlaces(cx);
     cx.timer.every(10000, (cx) => this.refresh(cx));
-    cx.timer.every(30000, (cx) => this.findPlaces(cx));
+    cx.timer.every(20000, (cx) => this.findPlaces(cx));
+    cx.timer.every(2000, (cx) => { if (this.stale) { this.stale = false; this.findPlaces(cx); } });
+    this.scope = null; // "work": uncommitted changes; "branch": everything since the base branch; null: decided per repository
   }
 
   // The folder everything is shown relative to: the space's home folder (shared "space.home"),
@@ -129,9 +131,9 @@ export default class Changes extends View {
       const found = new Map(), extra = new Set(), real = {};
       const read = (out) => {
         for (const line of out.split("\n").filter(Boolean).slice(0, 1500)) {
-          const [kind, path, branch, count] = line.split("\t");
+          const [kind, path, branch, count, ahead] = line.split("\t");
           if (kind === "T") real[path] = branch; // a root as given -> resolved
-          else if (kind === "R" && path && found.size < 300) found.set(path, { path, branch, count: Number(count) || 0 });
+          else if (kind === "R" && path && found.size < 300) found.set(path, { path, branch, count: Number(count) || 0, ahead: Number(ahead) || 0 });
           else if (kind === "W" && path) extra.add(path);
         }
       };
@@ -211,12 +213,20 @@ export default class Changes extends View {
   picker(t) {
     const at = here(), pin = pinned[at.space] ?? null;
     const mine = this.placesFor === at.space ? this.places : [];
-    const shown = this.all ? mine : mine.filter((p) => p.count > 0 || p.path === pin);
+    const crew = this.workers(), near = (p, dir) => p === dir || p.startsWith(`${dir}/`);
+    // Listed: uncommitted files, commits that are on no remote yet, a task's worktree, or an agent at work there.
+    const active = (p) => p.count > 0 || p.ahead > 0 || Boolean(p.task) || crew.some((w) => near(w.cwd, p.path));
+    const shown = this.all ? mine : mine.filter((p) => active(p) || p.path === pin);
     if (mine.length < 2 && !pin) return null; // one repository: nothing to choose
-    const changed = mine.filter((p) => p.count > 0).length;
+    // New worktrees: look again as soon as the Project Agent records one.
+    const recorded = JSON.stringify((shared("project-agent.worktrees") ?? {})[at.space] ?? []);
+    if (recorded !== this.recorded) { this.recorded = recorded; this.stale = true; }
+    const changed = mine.filter(active).length;
     const toggle = (id, label, on, click) => div().id(id).px(6).h(20).flex().flex_none().items_center().rounded(5).text_size(11).cursor_pointer()
       .bg(on ? t.selected : t.background).text_color(on ? t.foreground : t.dim).hover((s) => s.bg(t.hover)).on_click(click).child(label);
     const count = (n) => div().flex_none().text_size(10.5).text_color(n ? t.blocked : t.dim).child(n > 999 ? "999+" : String(n));
+    // Commits that exist only here (on no remote): "3↑".
+    const aheadOf = (n) => div().flex_none().text_size(10.5).text_color(t.working).child(`${n > 99 ? "99+" : n}↑`);
     // Agents by where they work: in a repository, else in the nearest folder shown, else at the top.
     const agents = this.workers(), within = (p, dir) => p === dir || p.startsWith(`${dir}/`);
     const inRepo = (w) => mine.some((p) => within(w.cwd, p.path));
@@ -236,6 +246,7 @@ export default class Changes extends View {
         .on_click((_e, cx) => { cx.stop_propagation(); setShared("project-agent.show", { space: at.space, task: p.task, at: Date.now() }); run("layout.select", { stack: "panel-body", child: "project-agent" }); })
         .child(`${p.task} →`)))
       .children(jump(agents.filter((w) => within(w.cwd, p.path)), `r${i}`))
+      .when(p.ahead > 0, (el) => el.child(aheadOf(p.ahead)))
       .child(count(p.count));
     const rows = [];
     if (this.layout === "list") {
@@ -290,14 +301,15 @@ export default class Changes extends View {
     const top = this.top();
     return v_flex().id("changes-places").flex_none().border_b(1).border_color(t.border)
       .child(h_flex().h(28).px(10).gap(6).items_center()
-        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(`${top.split("/").pop() || "/"} · ${mine.length} repositories, ${changed} with changes`))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(`${top.split("/").pop() || "/"} · ${mine.length} repositories, ${changed} with work in them`))
+        .child(toggle("places-refresh", this.finding ? "Looking…" : "↻ Refresh", false, (_e, cx) => { this.findPlaces(cx); this.refresh(cx); cx.notify(); }))
         // Agents working at the top folder itself, or somewhere no row shows.
         .children(jump(agents.filter((w) => !shown.some((p) => within(w.cwd, p.path)) && (this.layout === "list" || !within(w.cwd, this.real?.[top] ?? top) || w.cwd === (this.real?.[top] ?? top))), "top"))
         .child(toggle("places-here", "Follow focus", !pin, (_e, cx) => this.pin(null, cx)))
         .child(toggle("places-tree", "Tree", this.layout === "tree", (_e, cx) => { this.layout = "tree"; localStorage.setItem("places.layout", "tree"); cx.notify(); }))
         .child(toggle("places-list", "List", this.layout === "list", (_e, cx) => { this.layout = "list"; localStorage.setItem("places.layout", "list"); cx.notify(); }))
         .child(toggle("places-tasks", "Tasks", this.layout === "tasks", (_e, cx) => { this.layout = "tasks"; localStorage.setItem("places.layout", "tasks"); cx.notify(); }))
-        .child(toggle("places-all", this.all ? "All" : "Changed", this.all, (_e, cx) => { this.all = !this.all; localStorage.setItem("places.all", this.all ? "1" : "0"); cx.notify(); })))
+        .child(toggle("places-all", this.all ? "All" : "Active", this.all, (_e, cx) => { this.all = !this.all; localStorage.setItem("places.all", this.all ? "1" : "0"); cx.notify(); })))
       .child(div().h(Math.min(Math.max(rows.length, 1) * 24 + 8, 224)).relative()
         .child(v_flex().id("places-rows").absolute().inset_0().overflow_y_scroll().p(4)
           .when(!rows.length, (el) => el.child(div().px(8).py(4).text_size(11.5).text_color(t.dim).child(this.finding ? "Looking for repositories…" : "No repository here has changes.")))
@@ -336,8 +348,28 @@ export default class Changes extends View {
         const status = await git(["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]);
         if (status.code !== 0) throw new Error(status.stderr);
         const head = await git(["rev-parse", "--verify", "HEAD"]);
+        // The base to compare a branch against: where it left its upstream or the main branch.
+        let base = null;
+        if (head.code === 0) {
+          const own = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+          // Its upstream, the remote's default branch, then the usual main-branch names plus any a
+          // Project Agent's profile names for this space (shared "project-agent.mainBranches").
+          const names = ["main", "master", "trunk", ...((shared("project-agent.mainBranches") ?? {})[here().space] ?? [])];
+          for (const ref of ["@{upstream}", "origin/HEAD", ...names.map((n) => `origin/${n}`), ...names]) {
+            if (ref === own) continue;
+            const mb = await git(["merge-base", "HEAD", ref]);
+            if (mb.code !== 0 || !mb.stdout.trim()) continue;
+            const n = Number((await git(["rev-list", "--count", `${mb.stdout.trim()}..HEAD`])).stdout.trim()) || 0;
+            base = { ref: ref.replace(/^origin\//, "").replace("@{upstream}", "upstream"), sha: mb.stdout.trim(), commits: n };
+            break;
+          }
+        }
+        const dirty = status.stdout.split("\0").filter(Boolean).length;
+        // Nothing uncommitted but commits since the base (an agent that commits as it goes): show the branch.
+        const branchScope = Boolean(base?.commits) && (this.scope === "branch" || (this.scope === null && !dirty));
+        const against = branchScope ? base.sha : "HEAD";
         const stats = {};
-        const results = head.code === 0 ? [await git(["diff", "HEAD", "--numstat", "-z", "--no-renames"])] : [await git(["diff", "--cached", "--numstat", "-z", "--no-renames"]), await git(["diff", "--numstat", "-z", "--no-renames"])];
+        const results = head.code === 0 ? [await git(["diff", against, "--numstat", "-z", "--no-renames"])] : [await git(["diff", "--cached", "--numstat", "-z", "--no-renames"]), await git(["diff", "--numstat", "-z", "--no-renames"])];
         for (const result of results) {
           if (result.code !== 0) throw new Error(result.stderr);
           for (const entry of result.stdout.split("\0")) {
@@ -348,7 +380,14 @@ export default class Changes extends View {
           }
         }
         const files = [];
-        const entries = status.stdout.split("\0").filter(Boolean);
+        let entries = status.stdout.split("\0").filter(Boolean);
+        if (branchScope) {
+          // Files changed since the base, committed or not, in the same "XY path" shape as git status.
+          const names = (await git(["diff", against, "--name-status", "-z", "--no-renames"])).stdout.split("\0").filter(Boolean);
+          const listed = new Set(), since = [];
+          for (let i = 0; i + 1 < names.length; i += 2) { listed.add(names[i + 1]); since.push(`${names[i][0]}  ${names[i + 1]}`); }
+          entries = [...since, ...entries.filter((e) => e.startsWith("??") && !listed.has(e.slice(3)))];
+        }
         for (const entry of entries.slice(0, 1000)) {
           const xy = entry.slice(0, 2), path = entry.slice(3), fresh = xy === "??";
           const conflict = xy.includes("U") || xy === "AA" || xy === "DD";
@@ -357,6 +396,7 @@ export default class Changes extends View {
           files.push({ path, status: s, fresh, ...stat });
         }
         if (key() !== context) return;
+        this.base = base; this.against = against; this.branchScope = branchScope; this.dirty = dirty;
         this.root = root; this.on = on; this.hasHead = head.code === 0; this.files = files; this.limited = entries.length > 1000; this.error = null;
         this.watch(root, cx);
         if (this.open && !files.some((f) => f.path === this.open)) { this.open = null; this.setLines([]); }
@@ -384,7 +424,7 @@ export default class Changes extends View {
         lines = [`@@ -0,0 +1,${file.add} @@`, ...text.slice(0, 400000).replace(/\n$/, "").split("\n").slice(0, 1500).map(l => `+${l}`)];
       }
     } else {
-      const r = await exec("git", [...READ, "diff", ...(this.hasHead ? ["HEAD"] : []), "--no-ext-diff", "--no-textconv", "--no-color", "--", path], { cwd: root, on });
+      const r = await exec("git", [...READ, "diff", ...(this.hasHead ? [this.against ?? "HEAD"] : []), "--no-ext-diff", "--no-textconv", "--no-color", "--", path], { cwd: root, on });
       if (r.code !== 0) throw new Error(r.stderr);
       const all = r.stdout.replace(/\n$/, "").split("\n"), first = all.findIndex((l) => l.startsWith("@@"));
       lines = first < 0 ? [file.binary ? "Binary file changed" : "No text diff available"] : all.slice(first);
@@ -443,6 +483,12 @@ export default class Changes extends View {
       })
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().child("Changes"))
+        // Uncommitted changes, or everything on this branch since its base (what an agent has committed too).
+        .when(Boolean(this.base?.commits), (el) => el.child(h_flex().flex_none().gap(2)
+          .child(div().id("scope-work").px(6).h(20).flex().items_center().rounded(5).text_size(11).cursor_pointer().bg(!this.branchScope ? t.selected : t.background).text_color(!this.branchScope ? t.foreground : t.dim)
+            .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.scope = "work"; this.refresh(cx); cx.notify(); }).child(`Uncommitted · ${this.dirty ?? 0}`))
+          .child(div().id("scope-branch").px(6).h(20).flex().items_center().rounded(5).text_size(11).cursor_pointer().bg(this.branchScope ? t.selected : t.background).text_color(this.branchScope ? t.foreground : t.dim)
+            .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.scope = "branch"; this.refresh(cx); cx.notify(); }).child(`Since ${this.base.ref} · ${this.base.commits} commits`))))
         .when(Boolean(this.root), (el) => el.child(div().min_w(0).truncate().text_size(12).text_color(t.muted).tooltip(this.root ?? "").child(this.rel(this.root ?? ""))))
         .child(div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted).child(`${this.files.length} files`))
         .child(div().flex_1()).child(div().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().text_size(11).text_color(t.ansi1).child(`−${del}`)))
@@ -455,7 +501,7 @@ export default class Changes extends View {
           .child(div().w(14).text_size(11).text_color(f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : f.status === "U" ? t.ansi1 : t.blocked).child(f.status))
           .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().child(name)))
           .when(f.add > 0, (e) => e.child(div().text_size(11).text_color(t.ansi2).child(`+${f.add}`))).when(f.del > 0, (e) => e.child(div().text_size(11).text_color(t.ansi1).child(`−${f.del}`)));
-      })).when(!this.files.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : this.root ? "No uncommitted changes" : "No folder")))))
+      })).when(!this.files.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : this.root ? (this.branchScope ? "No changes since the base" : "No uncommitted changes") : "No folder")))))
         .child(Scrollbar.vertical("changes-list").absolute().inset_0()))
       .when(this.limited, el => el.child(div().px(12).py(4).text_size(11).text_color(t.dim).child("Showing the first 1,000 changed files")))
       .child(div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(11)

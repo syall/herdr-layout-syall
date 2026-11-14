@@ -21,12 +21,13 @@ function subject(p) {
 
 // A macOS notification: terminal-notifier when it is installed (a click comes back to Herdr and
 // runs the toast's command; a newer one about the same thing replaces the older), else the
-// system's own script command (text only). Looked for once every ten minutes.
+// system's own script command (text only).
 async function system(p) {
   const { space, who } = subject(p);
   const title = space || "Herdr", subtitle = [who, p.title].filter(Boolean).join(" · "), message = p.body || p.title || "";
   let tool = shared("my-toast.notifier");
-  if (!tool || Date.now() - tool.at > 600000) {
+  // Found: trusted for ten minutes. Not found: looked for again after a minute, so an install shows up quickly.
+  if (!tool || Date.now() - tool.at > (tool.path ? 600000 : 60000)) {
     const found = await exec("sh", ["-lc", "command -v terminal-notifier"], { timeout: 8000 }).catch(() => ({ code: 1, stdout: "" }));
     tool = { path: found.code === 0 ? found.stdout.trim().split("\n").pop() : null, at: Date.now() };
     setShared("my-toast.notifier", tool);
@@ -35,8 +36,11 @@ async function system(p) {
     const args = ["-title", title, "-subtitle", subtitle, "-message", message, "-activate", "dev.herdr.app",
       "-group", `herdr-${p.action?.args?.terminal ?? p.action?.args?.id ?? p.title ?? "note"}`];
     if (p.action?.name) args.push("-execute", `herdr-app do ${p.action.name} '${JSON.stringify(p.action.args ?? {}).replace(/'/g, "'\\''")}'`);
-    await exec(tool.path, args, { timeout: 15000 });
-  } else {
+    // It exits with an error when macOS has not allowed its notifications: then use the script command.
+    const sent = await exec(tool.path, args, { timeout: 15000 }).catch(() => ({ code: 1 }));
+    if (sent.code === 0) return;
+  }
+  {
     await exec("osascript", ["-e", "on run argv", "-e", "display notification (item 1 of argv) with title (item 2 of argv) subtitle (item 3 of argv)", "-e", "end run", message, title, subtitle], { timeout: 15000 });
   }
 }

@@ -1,0 +1,9 @@
+{
+  "programs": {
+    "claude": {
+      "run": [
+        "pa-claude"
+      ]
+    }
+  }
+}

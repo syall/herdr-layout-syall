@@ -15,6 +15,7 @@ other mods to be installed: `project-agent` (repo `herdr-project-agent`) and `sp
 | `mods/my-pane/` | Pane header (clone of `pane`): home-folder splits, no close on the Project Agent's pane |
 | `mods/my-changes/` | Changes view (clone of `changes`): a picker for the space's other repositories and worktrees |
 | `mods/my-files/` | Files view (clone of `files`): can be pointed at a folder through shared `my-files.root` |
+| `mods/my-toast/` | Notifications (clone of `toast`): also a macOS notification when Herdr is not in front, through `terminal-notifier` if installed, else the system's script command |
 | `mods/my-agent-picker/` | The Agents view's picker |
 | `config/keys.json` | Key bindings: Cmd-N, Cmd-T, Cmd-D, Cmd-Shift-D, Cmd-W, Cmd-Shift-W go to the mods above |
 | `config/programs.json` | Herdr's Claude entry runs `pa-claude` (written by `pa-profile apply`) |

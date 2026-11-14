@@ -225,5 +225,6 @@
     12,
     16
   ],
-  "terminal_menu": "my-menu"
+  "terminal_menu": "my-menu",
+  "toast": "my-toast"
 }

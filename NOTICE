@@ -16,5 +16,6 @@ Derived from the layouts, key bindings and mods shipped with Herdr 0.1.15:
   mods/my-files      from `files`      (code and icons)
   mods/my-new-menu   from `new-menu`
   mods/my-changes    from `changes`    (code and icon)
+  mods/my-toast      from `toast`
 
 Original to this repository: mods/my-agent-picker, smoke/, install.sh, README.md.

@@ -1,0 +1,20 @@
+Herdr layouts and mods by syall
+Copyright 2026 syall
+
+This repository contains files derived from Herdr (https://herdr.dev), which is
+distributed under the Apache License, Version 2.0. The derived files are modified;
+each derived mod's main.js says so in its first lines.
+
+Derived from the layouts, key bindings and mods shipped with Herdr 0.1.15:
+
+  layouts/syall.json, layouts/syall-project-agent.json   from the `main` layout
+  config/keys.json                                        from Herdr's default key bindings
+  mods/my-tabs       from `tabs`       (code and window-button icons)
+  mods/my-spaces     from `spaces`
+  mods/my-menu       from `menu`
+  mods/my-pane       from `pane`       (code and icons)
+  mods/my-files      from `files`      (code and icons)
+  mods/my-new-menu   from `new-menu`
+  mods/my-changes    from `changes`    (code and icon)
+
+Original to this repository: mods/my-agent-picker, smoke/, install.sh, README.md.

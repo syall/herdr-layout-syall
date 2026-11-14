@@ -54,3 +54,7 @@ It catches calls on missing values and misspelt fields, not layout or looks.
 - `project-agent.workers`: which task each worker belongs to, for the Agents view's task bar.
 
 They write `project-agent.show` (`{ space, task, at }`) to open a task in the Project panel.
+
+## Licence
+
+Apache License 2.0; see `LICENSE` and `NOTICE`. Most of the mods here are modified copies of the mods Herdr ships (also Apache-2.0); `NOTICE` lists which, and each one says so at the top of its `main.js`.

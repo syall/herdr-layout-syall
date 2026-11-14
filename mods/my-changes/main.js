@@ -1,3 +1,5 @@
+// Modified from the `changes` mod shipped with Herdr 0.1.15 (Apache License 2.0).
+// Changes by syall: a repository picker (tree, list, by task) with links to agents and tasks.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared, setShared, terminals, layout, run } from "herdr";

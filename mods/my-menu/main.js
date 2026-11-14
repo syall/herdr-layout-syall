@@ -1,3 +1,5 @@
+// Modified from the `menu` mod shipped with Herdr 0.1.15 (Apache License 2.0).
+// Changes by syall: home-folder items, no Close for a Project Agent tab or pane.
 // Context menus (Herdr's items). Opened as a popup with
 // props { tab: "pane" | "tab" | "space" | "global", target }.
 // ↑/↓ move, Enter runs, Esc closes. An item is [label, command, args];

@@ -1,3 +1,5 @@
+// Modified from the `new-menu` mod shipped with Herdr 0.1.15 (Apache License 2.0).
+// Changes by syall: tabs start in the space home folder; New space starts the Project Agent launcher.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, spaces, panes, knownAgents, run, openOverlay, closeOverlay, props, window, keys, shared, setShared } from "herdr";

@@ -1,3 +1,5 @@
+// Modified from the `files` mod shipped with Herdr 0.1.15 (Apache License 2.0).
+// Changes by syall: pinned folders, shortcuts, file filter, markdown preview, side file list.
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView, InputState, Input } from "gpui-base";

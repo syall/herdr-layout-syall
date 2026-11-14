@@ -1,3 +1,5 @@
+// Modified from the `tabs` mod shipped with Herdr 0.1.15 (Apache License 2.0).
+// Changes by syall: panel buttons, pins, the Project Agent tab guards, home-folder tabs and splits, the full-width panel toggle.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, knownAgents, terminals, machines, focused, nextCommand, notify, readTextFile, home } from "herdr";

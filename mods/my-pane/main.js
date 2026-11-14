@@ -1,3 +1,5 @@
+// Modified from the `pane` mod shipped with Herdr 0.1.15 (Apache License 2.0).
+// Changes by syall: home-folder splits, no close button on a Project Agent pane.
 // A pane's header, for layouts that frame their panes:
 //   { "tab": "active", "pane": { "header": { "content": { "mod": "my-pane" } } } }
 // Shows the program's icon (the app's program table), the agent's name or

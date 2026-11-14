@@ -6,7 +6,7 @@
 
 import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, closeOverlay, run, theme, window, agents, spaces, shared, setShared, exec } from "herdr";
+import { props, closeOverlay, run, theme, window, agents, spaces, shared, setShared, exec, hc } from "herdr";
 
 // What the notification is about, from the command it runs when clicked: the space, and the
 // agent or task. Herdr's own toasts go to an agent (`terminal`); others may name a space (`id`).
@@ -15,16 +15,51 @@ function subject(p) {
   const agent = args.terminal ? agents().find((a) => a.address === args.terminal) : null;
   const space = spaces().find((s) => s.id === (agent?.space ?? args.id ?? args.space));
   const job = agent && space ? (shared("project-agent.workers") ?? {})[space.id]?.[agent.address] : null;
-  const who = job ? `${job.task} · ${job.role ?? "worker"}` : agent ? agent.tab_name || agent.title || "" : "";
-  return { space: space?.name ?? "", who };
+  const tab = agent ? (agent.tab_name || agent.title || "").replace(/^PA: .*/, "Project Agent") : "";
+  const who = job ? `${job.task} ${job.role ?? "worker"}` : tab;
+  return { space: space?.name ?? "", who, job, agent };
+}
+
+// What the agent last said, or what it is asking, read off its screen: the detail a
+// notification is for. Screen furniture (rules, the prompt, status and spinner lines) is
+// skipped; long numbers are dropped.
+export function detail(screen, asking) {
+  const lines = String(screen ?? "").split("\n").map((l) => l.replace(/\s+$/, ""))
+    .filter((l) => l.trim() && !/^[\s─━═│┃╭╮╰╯┌┐└┘├┤▔▁_-]+$/.test(l) && !/[─━═]{8,}/.test(l) && !/^\s*[❯>)›]\s/.test(l) && !/^\s*[❯>)›]\s*$/.test(l)
+      && !/\bctx\b.*\d+%|auto mode|shift\+tab|\bacct\b|esc to interrupt|^\s*[✻✽✶*·]\s.*\bfor \d+/.test(l));
+  if (!lines.length) return "";
+  const clean = (text) => text.replace(/[│┃╭╮╰╯┌┐└┘├┤]/g, " ").replace(/^[\s●⏺•*-]+/, "").replace(/\d{9,}/g, "…").replace(/\s+/g, " ").trim();
+  if (asking) {
+    // The question, and the line before it (usually what it wants to run).
+    const at = lines.map((l) => /\?\s*$|Do you want|Allow |Proceed|approve/i.test(l)).lastIndexOf(true);
+    if (at >= 0) return lines.slice(Math.max(0, at - 1), at + 1).map(clean).filter(Boolean).join(" — ").slice(0, 220);
+  }
+  // The last sentences of its last message.
+  const start = Math.max(lines.map((l) => /^\s*[●⏺]/.test(l)).lastIndexOf(true), lines.length - 4, 0);
+  const text = clean(lines.slice(start).map((l) => l.trim()).join(" "));
+  if (text.length <= 220) return text;
+  const tail = text.slice(-220), cut = tail.search(/[.!?] [A-Z]/);
+  return cut >= 0 && cut < 120 ? tail.slice(cut + 2) : `…${tail}`;
+}
+
+// The toast's text made specific: who, what happened, and the agent's own words.
+async function specifics(p) {
+  const s = subject(p), asking = /need|block|wait|permission|input/i.test(`${p.title ?? ""} ${p.body ?? ""}`) || s.agent?.status === "blocked";
+  let said = "";
+  if (s.agent) {
+    try { said = detail((await hc(["read", s.agent.address, "--lines", "0"])).stdout, asking); } catch {}
+  }
+  const happened = s.agent ? (asking ? "needs you" : "finished") : p.title ?? "";
+  return { space: s.space, headline: [s.who, happened].filter(Boolean).join(" "), task: s.job ? `${s.job.task}: ${s.job.title}` : "", said: said || p.body || "" };
 }
 
 // A macOS notification: terminal-notifier when it is installed (a click comes back to Herdr and
 // runs the toast's command; a newer one about the same thing replaces the older), else the
 // system's own script command (text only).
 async function system(p) {
-  const { space, who } = subject(p);
-  const title = space || "Herdr", subtitle = [who, p.title].filter(Boolean).join(" · "), message = p.body || p.title || "";
+  const d = await specifics(p);
+  // Title: the space. Subtitle: who and what happened. Message: the task, then what it said or asked.
+  const title = d.space || "Herdr", subtitle = d.headline || p.title || "", message = [d.task, d.said].filter(Boolean).join(" — ") || p.title || "";
   let tool = shared("my-toast.notifier");
   // Found: trusted for ten minutes. Not found: looked for again after a minute, so an install shows up quickly.
   if (!tool || Date.now() - tool.at > (tool.path ? 600000 : 60000)) {
@@ -52,6 +87,8 @@ export default class Toast extends View {
     // With Herdr in front the toast is enough; behind another app, say it through macOS too.
     const p = props() ?? {};
     if (window()?.platform === "macos" && !window().active && (p.title || p.body)) cx.spawn(async () => { try { await system(p); } catch {} });
+    // The in-app toast gets the same detail under its title.
+    cx.spawn(async (cx) => { try { this.more = await specifics(p); cx.notify(); } catch {} });
   }
 
   render(cx) {
@@ -77,8 +114,8 @@ export default class Toast extends View {
         v_flex()
           .flex_1()
           .overflow_hidden()
-          .child(div().truncate().font_semibold().text_size(13).text_color(t.foreground).child(login ? `${login[1]} needs a login: run` : p.title ?? ""))
-          .when(!login && Boolean(p.body), (el) => el.child(div().truncate().text_size(12).text_color(t.muted).child(p.body ?? "")))
+          .child(div().truncate().font_semibold().text_size(13).text_color(t.foreground).child(login ? `${login[1]} needs a login: run` : this.more?.headline ? `${this.more.space ? `${this.more.space} · ` : ""}${this.more.headline}` : p.title ?? ""))
+          .when(!login && Boolean(this.more?.said || p.body), (el) => el.child(div().truncate().text_size(12).text_color(t.muted).child([this.more?.task, this.more?.said || p.body].filter(Boolean).join(" — "))))
           .when(Boolean(login), (el) => el.child(h_flex().gap(8).items_center()
             .child(div().flex_1().min_w(0).truncate().tooltip(command).text_size(12).text_color(t.muted).child(command))
             .child(div().id("toast-login-copy").flex_none().px(6).py(3).rounded(4).bg(t.raised)

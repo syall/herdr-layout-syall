@@ -138,18 +138,24 @@ const changesCache = async () => {
   const release = () => { const h = held ?? []; held = null; for (const f of h) f(); };
   // A scanned, then B scanned: a view that has kept both.
   const both = async () => { show(A); const w = fresh(); await settle(); show(B); w.findPlaces(cx); await settle(); return w; };
-  const parts = {
-    // C-cache-switch-back (AC6.1): A, then B, then A: A's list is there at once, before any scan settles.
-    "AC6.1": async () => {
+  // C-cache-switch-back (AC6.1): A, then B, then A: A's list is there at once, before any scan settles.
+  // B records the same worktrees as A, so the switch alone does not change what render notes as recorded.
+  const switchBack = async () => {
+    const wt = globalThis.__shared["project-agent.worktrees"]; wt[B.id] = wt[S];
+    try {
       const w = await both();
       if (w.placesFor !== B.id) return `setup: B's scan did not commit (placesFor ${w.placesFor})`;
+      w.render(cx); w.stale = false; // the first render notes the recorded worktrees (stale): not what is checked here
       held = []; show(A); w.render(cx);
       if (w.placesFor !== S || paths(w) !== want(S)) return `back on A, expected A's kept list at once, got placesFor ${w.placesFor} places ${paths(w)}`;
       if (w.stale !== true) return `a kept list must still be rescanned (stale), got stale ${w.stale}`;
       const n = (globalThis.__execs ?? []).length; w.render(cx); w.render(cx);
       if ((globalThis.__execs ?? []).length !== n) return `a render with a kept list started ${(globalThis.__execs ?? []).length - n} exec(s)`;
       return null;
-    },
+    } finally { delete wt[B.id]; }
+  };
+  const parts = {
+    "AC6.1": switchBack,
     // C-cache-updates: a rescan replaces the kept list (a repository appears, then one goes).
     "updates": async () => {
       const w = await both(), was = repos[S];
@@ -181,6 +187,19 @@ const changesCache = async () => {
       if (w.placesFor !== nine[1].id || paths(w) !== want(nine[1].id)) return `the 8 most recent spaces must be kept: space 2 of 9 was not (placesFor ${w.placesFor})`;
       globalThis.__spaces = [nine[0]]; w.render(cx);
       return w.placesFor === nine[0].id ? "more than 8 spaces kept: space 1 of 9 still shown from the cache" : null;
+    },
+    // Showing a kept space again makes it the most recently shown: the next space drops another one.
+    "limit recency": async () => {
+      const nine = Array.from({ length: 9 }, (_, i) => sp(`m3/s${i}`, "m3"));
+      for (const s of nine) repos[s.id] = [`/home/u/${s.id}/a`, `/home/u/${s.id}/b`];
+      const w = fresh(); await settle();
+      for (const s of nine.slice(0, 8)) { globalThis.__spaces = [s]; w.render(cx); w.findPlaces(cx); await settle(); }
+      globalThis.__spaces = [nine[0]]; w.render(cx); // shown again, not rescanned
+      globalThis.__spaces = [nine[8]]; w.render(cx); w.findPlaces(cx); await settle();
+      held = []; globalThis.__spaces = [nine[0]]; w.render(cx);
+      if (w.placesFor !== nine[0].id) return `space 1, shown again before space 9, was dropped instead of space 2 (placesFor ${w.placesFor})`;
+      globalThis.__spaces = [nine[1]]; w.render(cx);
+      return w.placesFor === nine[1].id ? "space 2, the least recently shown, was kept" : null;
     },
     // C-remote-interval (AC6.2): three 20 s ticks rescan a remote space once and a local one three times.
     "AC6.2": async () => {

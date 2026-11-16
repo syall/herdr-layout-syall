@@ -35,6 +35,9 @@ const base = (path) => path.replace(/\/+$/, "").split("/").pop();
 // Changes made outside Herdr (an editor's save, a commit in another app): looked
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
+// How a new space finds the Project Agent launcher on a machine: prints the name or path to run.
+const FIND_LAUNCHER = 'if command -v pa-session >/dev/null 2>&1; then echo pa-session; elif [ -x "$HOME/.local/bin/pa-session" ]; then echo "$HOME/.local/bin/pa-session"; else exit 1; fi';
+const LAUNCHER_RECHECK = 60000;
 
 // What a stored color name looks like on an avatar (the same in every mod
 // that draws space avatars): one strong color per hue, light and dark alike.
@@ -54,7 +57,7 @@ export default class Spaces extends View {
     // New spaces start the Project Agent launcher where it is installed: its first tab asks whether
     // to set up a Project Agent now, or which session to open instead. Elsewhere: Herdr's Claude entry.
     this.claudeRun = ["claude"];
-    this.launcher = {}; // machine ("" here) -> true | false | "asking"
+    this.launcher = {}; // machine ("" here) -> "asking" (first check) | { run: argv | null, at, asking }
     knownAgents().then((list) => { const c = list.find((a) => a.key === "claude"); if (c?.run?.length) this.claudeRun = c.run; }).catch(() => {});
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
@@ -80,17 +83,28 @@ export default class Spaces extends View {
     cx.timer.every(250, (cx) => this.checkNew(cx));
   }
 
-  // What a new space's first tab runs on that machine (null or "": this computer).
+  // What a new space's first tab runs on that machine (null or "": this computer). pa-session counts
+  // when sh -l finds it, or at its install location ~/.local/bin (a login sh may not have that on PATH,
+  // while the tab itself runs through the user's shell). A "not there" answer is checked again after
+  // LAUNCHER_RECHECK. Answers are shared as "my-spaces.launcher" ({ machine: argv | null }) for my-new-menu.
   newSpaceRun(machine, cx) {
     const key = machine || "";
-    if (this.launcher[key] === undefined) {
-      this.launcher[key] = "asking";
+    const known = this.launcher[key];
+    if (known === undefined || (known !== "asking" && known.run === null && !known.asking && Date.now() - known.at > LAUNCHER_RECHECK)) {
+      if (known === undefined) this.launcher[key] = "asking"; else known.asking = true;
       cx.spawn(async () => {
-        try { this.launcher[key] = (await exec("sh", ["-lc", "command -v pa-session"], { on: machine || null, timeout: 10000 })).code === 0; }
-        catch { this.launcher[key] = undefined; }
+        try {
+          const r = await exec("sh", ["-lc", FIND_LAUNCHER], { on: machine || null, timeout: 10000 });
+          const found = r.code === 0 ? (r.stdout ?? "").trim().split("\n").pop() : "";
+          const run = found ? [found, "--ask"] : null;
+          this.launcher[key] = { run, at: Date.now() };
+          setShared("my-spaces.launcher", { ...(shared("my-spaces.launcher") ?? {}), [key]: run });
+        }
+        catch { delete this.launcher[key]; }
       });
     }
-    return this.launcher[key] === true ? ["pa-session", "--ask"] : this.claudeRun;
+    const now = this.launcher[key];
+    return now && now !== "asking" && now.run ? now.run : this.claudeRun;
   }
 
   checkNew(cx) {

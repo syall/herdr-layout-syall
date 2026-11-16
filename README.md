@@ -9,7 +9,7 @@ other mods to be installed: `project-agent` (repo `herdr-project-agent`) and `sp
 | `layouts/syall.json` | The same window without the Project Agent pieces (the layout this one grew from) |
 | `layouts/syall-project-agent.json` | The layout: sidebar, tab bar, panes, a right panel stacking Changes, Files, Agents and Project, and the hidden `pa-timer` block |
 | `mods/my-tabs/` | Tab bar (clone of `tabs`): panel buttons, pins, home-folder tabs and splits, close guards for the Project Agent tab |
-| `mods/my-spaces/` | Spaces sidebar (clone of `spaces`): new spaces start `pa-session --ask` |
+| `mods/my-spaces/` | Spaces sidebar (clone of `spaces`): new spaces start `pa-session --ask` (found on `sh -l` PATH or in `~/.local/bin`; a "not found" is checked again after a minute) |
 | `mods/my-new-menu/` | The "+" menu (clone of `new-menu`): tabs start in the space's home folder |
 | `mods/my-menu/` | Right-click menus (clone of `menu`): "Set home folder…", no Close on a Project Agent tab |
 | `mods/my-pane/` | Pane header (clone of `pane`): home-folder splits, no close on the Project Agent's pane |

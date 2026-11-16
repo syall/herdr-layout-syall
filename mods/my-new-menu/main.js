@@ -1,5 +1,5 @@
 // Modified from the `new-menu` mod shipped with Herdr 0.1.15 (Apache License 2.0).
-// Changes by syall: tabs start in the space home folder; New space starts the Project Agent launcher.
+// Changes by syall: tabs start in the space home folder; New space starts the Project Agent launcher (remote too, where my-spaces found it).
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, spaces, panes, knownAgents, run, openOverlay, closeOverlay, props, window, keys, shared, setShared } from "herdr";
@@ -44,6 +44,13 @@ export default class NewMenu extends View {
       cx.notify();
     });
   }
+  // New space: the Project Agent launcher here; on a remote machine the one my-spaces found there
+  // (shared "my-spaces.launcher"), else Herdr's default shell.
+  newSpaceArgs(space) {
+    if (!space?.machine) return { argv: ["pa-session", "--ask"] };
+    const run = (shared("my-spaces.launcher") ?? {})[space.machine];
+    return run?.length ? { argv: run } : {};
+  }
   row(id, icon, name, action, hint = "", enabled = true) {
     const t = theme();
     return h_flex().id(id).h(31).px(9).gap(10).rounded(7).items_center().flex_none()
@@ -72,7 +79,7 @@ export default class NewMenu extends View {
           () => run("tab.new", { name: a.name, space: space?.id, folder: homeOf(space?.id), argv: a.run }), a.installed ? (i < 9 ? String(i + 1) : "") : "not installed", a.installed)))
         .when(this.failed || this.agents.length === 0, el => el.child(div().px(9).py(6).text_color(t.dim).child(this.failed ? "Could not check installed agents" : "Checking installed agents…"))))
       .child(div().h(1).mx(4).my(5).bg(t.border))
-      .child(this.row("space", div().w(14).child("+"), "New space", () => run("space.new", space?.machine ? {} : { argv: ["pa-session", "--ask"] }), shortcut("space.new")))
+      .child(this.row("space", div().w(14).child("+"), "New space", () => run("space.new", this.newSpaceArgs(space)), shortcut("space.new")))
       .child(this.row("worktree", svg("mods/workspace-chrome/branch.svg").size(14), "New worktree…", () => openOverlay({ mod: "worktree", kind: "dialog", width: 460, height: 280, props: { space: space?.id, folder: panes().find(p => p.focused)?.cwd, action: "new" } }), "", Boolean(space)))
       .child(this.row("worktree-open", svg("mods/workspace-chrome/branch.svg").size(14), "Open worktree\u2026", () => openOverlay({ mod: "worktree", kind: "dialog", width: 560, height: 480, props: { space: space?.id, folder: panes().find(p => p.focused)?.cwd, action: "open" } }), "", Boolean(space)));
   }

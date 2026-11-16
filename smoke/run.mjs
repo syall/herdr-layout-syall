@@ -178,7 +178,36 @@ const launcherMore = async (v) => {
     return null;
   } finally { Date.now = now; globalThis.__onExec = undefined; process.env.HOME = keep.HOME; process.env.PATH = keep.PATH; }
 };
-if (mod === "my-spaces") after[mod] = async (v) => { v.launcher = {}; return (await launcherCase((m) => v.newSpaceRun(m, cx))) ?? launcherMore(v); };
+// t-010 review M1: a login profile that writes to stdout (a title escape with no newline, a banner) must not
+// end up in argv[0]. Only a marked line naming "pa-session" or an absolute .../pa-session counts; else no launcher.
+const launcherNoisy = async (v) => {
+  const { launcherFrom } = await import(`./.run/${mod}/main.js`);
+  if (typeof launcherFrom !== "function") return "t-010 M1 my-spaces exports no launcherFrom(result)";
+  const ESC = "\x1b]0;title\x07", cases = [
+    [{ code: 0, stdout: `${ESC}\n@pa-launcher:pa-session\n` }, ["pa-session", "--ask"]],
+    [{ code: 0, stdout: "Welcome\n@pa-launcher:/h/.local/bin/pa-session\n" }, ["/h/.local/bin/pa-session", "--ask"]],
+    [{ code: 0, stdout: `${ESC}pa-session\n` }, null], [{ code: 0, stdout: "pa-session\n" }, null], [{ code: 0, stdout: "" }, null],
+    [{ code: 1, stdout: "\n@pa-launcher:pa-session\n" }, null], [{ code: 0, stdout: "\n@pa-launcher:rel/pa-session\n" }, null],
+    [{ code: 0, stdout: "\n@pa-launcher:/a/pa-session-old\n" }, null], [{ code: 0, stdout: `\n@pa-launcher:/a${ESC}/pa-session\n` }, null],
+    [{ code: 0 }, null]];
+  for (const [r, want] of cases) { const got = launcherFrom(r); if (JSON.stringify(got) !== JSON.stringify(want)) return `t-010 M1 launcherFrom(${JSON.stringify(r)}) expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`; }
+  // End to end with the real sh: a ~/.profile printing a title escape without a newline.
+  const keep = { HOME: process.env.HOME, PATH: process.env.PATH, ENV: process.env.ENV }, h = `${here}/.run/home-t010c`, wait = () => new Promise((r) => setTimeout(r, 400));
+  fs.rmSync(h, { recursive: true, force: true }); fs.mkdirSync(`${h}/onpath`, { recursive: true }); fs.mkdirSync(`${h}/.local/bin`, { recursive: true });
+  fs.writeFileSync(`${h}/.profile`, "printf '\\033]0;title\\007'\n"); fs.writeFileSync(`${h}/onpath/pa-session`, "#!/bin/sh\n", { mode: 0o755 });
+  process.env.HOME = h; process.env.PATH = `${h}/onpath:/usr/bin:/bin`; delete process.env.ENV;
+  try {
+    v.launcher = {}; v.newSpaceRun("q1", cx); await wait();
+    const got = v.newSpaceRun("q1", cx);
+    if (JSON.stringify(got) !== JSON.stringify(["pa-session", "--ask"])) return `t-010 M1 noisy ~/.profile, pa-session on PATH: expected ["pa-session","--ask"], got ${JSON.stringify(got)}`;
+    fs.rmSync(`${h}/onpath/pa-session`); fs.writeFileSync(`${h}/.local/bin/pa-session`, "#!/bin/sh\n", { mode: 0o755 });
+    v.newSpaceRun("q2", cx); await wait();
+    const got2 = v.newSpaceRun("q2", cx);
+    if (JSON.stringify(got2) !== JSON.stringify([`${h}/.local/bin/pa-session`, "--ask"])) return `t-010 M1 noisy ~/.profile, pa-session in ~/.local/bin: expected the absolute path, got ${JSON.stringify(got2)}`;
+    return null;
+  } finally { process.env.HOME = keep.HOME; process.env.PATH = keep.PATH; if (keep.ENV !== undefined) process.env.ENV = keep.ENV; }
+};
+if (mod === "my-spaces") after[mod] = async (v) => { v.launcher = {}; return (await launcherCase((m) => v.newSpaceRun(m, cx))) ?? (await launcherMore(v)) ?? launcherNoisy(v); };
 // t-010 (my-new-menu): New space on a remote machine runs the launcher there too, not a plain shell.
 if (mod === "my-new-menu") after[mod] = async (v) => {
   if (typeof v.newSpaceArgs !== "function") return "t-010 my-new-menu has no newSpaceArgs(space)";

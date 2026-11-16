@@ -10,9 +10,12 @@ globalThis.localStorage = { getItem: () => null, setItem() {} };
 const S = globalThis.__shared ??= {};
 export const shared = (k) => S[k], setShared = (k, v) => { S[k] = v; };
 export const spaces = () => globalThis.__spaces ?? [], panes = () => globalThis.__panes ?? [], terminals = () => globalThis.__terminals ?? [], agents = () => globalThis.__agents ?? [], machines = () => [{ name: null, layout: "ready" }];
-export const focused = () => globalThis.__focused ?? null, layout = () => globalThis.__layout ?? ({ id: "root", children: [] }), theme = () => new Proxy({}, { get: () => "#000000" }), settings = () => ({ zoom: 1 }), window = () => ({ platform: "macos" });
+// window(): Herdr is in front, so my-toast does not also notify through the system.
+export const focused = () => globalThis.__focused ?? null, layout = () => globalThis.__layout ?? ({ id: "root", children: [] }), theme = () => new Proxy({}, { get: () => "#000000" }), settings = () => ({ zoom: 1 }), window = () => ({ platform: "macos", active: true });
 export const home = () => process.env.HOME, props = () => globalThis.__props ?? {}, run = (name, args) => { (globalThis.__runs ??= []).push({ name, args }); return null; }, notify = () => "", openOverlay = () => "o", closeOverlay = () => null, knownAgents = async () => [], nextCommand = () => new Promise(() => {}), watchFolder = () => new Promise(() => {}), pickFolder = async () => null, keys = () => [];
 import fs from "fs"; import { spawnSync } from "child_process";
 export const readTextFile = async (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return null; } }, writeTextFile = async () => null;
+// Programs that post on the desktop or reach the live Herdr are never started by a smoke run.
+const NEVER = new Set(["terminal-notifier", "osascript", "herdr-app", "herdr", "hc"]);
 // Every exec is recorded in __execs. With __noSpawn set nothing is started (the call reports failure).
-export const exec = async (c, a = []) => { globalThis.__onExec?.(c, a); (globalThis.__execs ??= []).push([c, ...a]); if (globalThis.__noSpawn) return { code: 1, stdout: "", stderr: "smoke: not spawned" }; const r = spawnSync(c, a, { encoding: "utf8" }); return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" }; }, hc = async () => ({ code: 0, stdout: "", stderr: "" });
+export const exec = async (c, a = []) => { globalThis.__onExec?.(c, a); (globalThis.__execs ??= []).push([c, ...a]); if (globalThis.__noSpawn || NEVER.has(String(c).split("/").pop())) return { code: 1, stdout: "", stderr: "smoke: not spawned" }; const r = spawnSync(c, a, { encoding: "utf8" }); return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" }; }, hc = async () => ({ code: 0, stdout: "", stderr: "" });

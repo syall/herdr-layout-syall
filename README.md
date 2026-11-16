@@ -45,7 +45,7 @@ cd smoke && for m in my-changes my-agent-picker my-files project-agent my-tabs m
 ```
 
 It catches calls on missing values and misspelt fields, not layout or looks.
-`tests/run-all.sh` runs every mod in this checkout (not the installed ones) from a temp copy and exits 1 on any failure (`--affected`: only the mods changed in `PA_CHANGED_FILES`).
+`tests/run-all.sh` runs every mod in this checkout (not the installed ones) from a temp copy and exits 1 on any failure (`--affected`: only the mods named in `PA_CHANGED_FILES`, newline-separated paths relative to the repo root).
 
 ## Shared state these mods read
 

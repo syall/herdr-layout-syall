@@ -62,14 +62,30 @@ if (mod === "my-agent-picker") {
     [() => { term("t2").state = "exited"; show("t2"); }, expectHides(1, "AC1.4")],
     // (e) not reported yet
     [() => { term("t2").state = "live"; show("zz/t1"); }, expectHides(0, "AC1.5")],
-    // (f) in this space only through a pane's terminal (not an agent)
-    [() => { show("t3"); }, expectHides(0, "AC1.6 (pane parent)")],
+    // (f) a child of this space's agent t1: a picker row
+    [() => { show("t3"); }, expectHides(0, "AC1.6 (row, child of an agent)")],
+    // (f2) not a row: its parent s1 is a pane terminal in tab tb2 that is not an agent (G1: the pane-tab branch)
+    [() => { globalThis.__panes.push({ pane: "p2", terminal: "s1", tab: "tb2", cwd: top, focused: false, program: { name: "zsh" }, title: "zsh" });
+      globalThis.__terminals.push({ address: "s1", state: "live", status: "idle", labels: {} }, { address: "s2", state: "live", parent: "s1", status: "working", program: { agent: true }, labels: {} });
+      show("s2"); }, expectHides(0, "AC1.6 (pane-tab parent, G1)")],
     // (g) hidden, then a pick shows a worker of this space again
     [() => { show("m/t9"); }, expectHides(1, "AC1.2 (setup for AC1.6)")],
     [() => { show("t2"); }, expectHides(0, "AC1.6 (after a pick)")],
     [() => {}, expectHides(0, "AC1.6 (next render)")],
-    // (h) an agent of this space with no parent in its tabs
-    [() => { globalThis.__agents.push({ address: "r/t5", space: S, status: "idle" }); globalThis.__terminals.push({ address: "r/t5", state: "live", status: "idle", program: { agent: true }, labels: {} }); show("r/t5"); }, expectHides(0, "AC1.6 (agent of the space)")],
+    // (h) an agent of this space with no parent in its tabs: a picker row
+    [() => { globalThis.__agents.push({ address: "r/t5", space: S, status: "idle" }); globalThis.__terminals.push({ address: "r/t5", state: "live", status: "idle", program: { agent: true }, labels: {} }); show("r/t5"); }, expectHides(0, "AC1.6 (agent row)")],
+    // (h2) not a row (its parent ended), reached only through an agent of the space (N1, G1: the agents() branch)
+    [() => { globalThis.__agents.push({ address: "a/t6", space: S, status: "idle" });
+      globalThis.__terminals.push({ address: "a/t6", state: "live", status: "idle", program: { agent: true }, labels: {} }, { address: "a/t7", state: "exited", parent: "a/t6", labels: {} }, { address: "a/t8", state: "live", parent: "a/t7", status: "working", program: { agent: true }, labels: {} });
+      show("a/t8"); }, expectHides(0, "AC1.6 (agents() root, N1)")],
+    // (i1) a worker the Project Agent recorded for this space (Files offers it): no parent, no pane, not an agent (I1)
+    [() => { globalThis.__terminals.push({ address: "w9", state: "live", status: "working", program: { agent: true }, labels: {} }); globalThis.__shared["project-agent.workers"][S].w9 = { task: "t-002", title: "x", role: "build" }; show("w9"); }, expectHides(0, "AC1.6 (PA-recorded worker, I1)")],
+    // (m) panes not reported yet: wait, for an own worker (m1) and a foreign one (m2); then decide (m3, m4) (M1)
+    [() => { globalThis.__keepPanes = globalThis.__panes; globalThis.__keepAgents = globalThis.__agents; globalThis.__panes = []; globalThis.__agents = []; show("t3"); }, expectHides(0, "AC1.5 (panes loading, own worker, M1)")],
+    [() => { show("m/t9"); }, expectHides(0, "AC1.5 (panes loading, foreign worker, M1)")],
+    [() => { show("m/t9", true); }, expectHides(0, "AC1.3 (hidden)")],
+    [() => { globalThis.__panes = globalThis.__keepPanes; globalThis.__agents = globalThis.__keepAgents; show("m/t9"); }, expectHides(1, "AC1.2 (panes loaded)")],
+    [() => { show("t3"); }, expectHides(0, "AC1.6 (panes loaded, own worker)")],
   ];
   checks[mod] = [...states[mod].map(() => null), ...extra.map((x) => x[1])];
   states[mod] = [...states[mod], ...extra.map((x) => x[0])];
@@ -87,12 +103,12 @@ if (mod === "my-changes") {
   // AC3.2: the space changes while a scan runs; the discarded scan must ask for another.
   after[mod] = async (v) => {
     const keep = globalThis.__spaces;
-    v.finding = false; v.stale = false; v.placesFor = S;
+    v.finding = false; v.stale = false; v.placesFor = S; const before = v.places;
     globalThis.__onExec = () => { globalThis.__spaces = [{ ...keep[0], active: false }, { id: "sp2", name: "other", active: true, machine: null, folder: top, tabs: [] }]; };
     v.findPlaces(cx);
     await new Promise((r) => setTimeout(r, 300));
     globalThis.__onExec = undefined; globalThis.__spaces = keep;
-    return v.placesFor === "sp2" ? "AC3.2 the scan for the old space was not discarded" : v.stale !== true ? `AC3.2 expected stale === true after a discarded scan, got ${v.stale}` : null;
+    return v.places !== before || v.placesFor !== S ? "AC3.2 the scan for the old space was not discarded" : v.stale !== true ? `AC3.2 expected stale === true after a discarded scan, got ${v.stale}` : null;
   };
 }
 let n = 0, failed = 0;

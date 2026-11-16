@@ -123,4 +123,9 @@ for (const [i, prep] of (states[mod] ?? [() => {}]).entries()) {
 }
 await new Promise((r) => setTimeout(r, 300));
 if (after[mod]) { const err = await after[mod](v); if (err) fail(`after: ${err}`); }
+// Self-check, every mod: the stub exec must refuse these programs even without __noSpawn (bare and by path).
+{ const { exec } = await import("./stubs.mjs"), keep = globalThis.__noSpawn; globalThis.__noSpawn = false;
+  for (const c of ["terminal-notifier", "osascript", "herdr-app", "herdr", "hc"]) for (const p of [c, `/nonexistent/bin/${c}`]) {
+    const r = await exec(p, []); if (r.stderr !== "smoke: not spawned") fail(`I1 stub exec did not refuse ${p}`); }
+  globalThis.__noSpawn = keep; }
 console.log(`${mod}: rendered ${n} state(s) ${failed ? `with ${failed} failure(s)` : "without an error"}`);

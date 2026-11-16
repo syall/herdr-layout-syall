@@ -120,16 +120,23 @@ if (mod === "my-changes") {
 const changesCache = async () => {
   const keep = { spaces: globalThis.__spaces, now: Date.now }, { spaces } = await import("./stubs.mjs");
   const A = { ...keep.spaces[0] }, sp = (id, machine) => ({ id, name: id, active: true, machine, folder: `/home/u/${id}`, tabs: [] });
-  const B = sp("m1/sp2", "m1"), C = sp("m1/sp3", "m1");
+  // C is on the same machine and in the same folder as B: only the space id tells them apart.
+  const B = sp("m1/sp2", "m1"), C = { ...sp("m1/sp3", "m1"), folder: B.folder };
   const repos = { [S]: [`${top}/src/A`, `${top}/src/A2`], [B.id]: ["/home/u/m1/sp2/x", "/home/u/m1/sp2/y"], [C.id]: ["/home/u/m1/sp3/z", "/home/u/m1/sp3/w"] };
   const show = (s) => { globalThis.__spaces = [...[A, B, C].filter((x) => x.id !== s.id).map((x) => ({ ...x, active: false })), { ...s, active: true }]; };
   let held = null, clock = keep.now();
   const scans = [], settle = () => new Promise((r) => setTimeout(r, 30));
+  // fail[id]: how a scan of that space fails ("exit": non-zero and no output, "throw": exec throws, as on a
+  // timeout, "partial": killed after part of its output). took: simulated seconds a scan takes (clock moves on).
+  const fail = {}; let took = 0;
   globalThis.__fakeExec = (c, a) => {
     if (c !== "sh" || a[2] !== "sh" || !["scan", "status"].includes(a[3])) return { code: 1, stdout: "", stderr: "smoke: fake" };
     if (a[3] === "status") return { code: 0, stdout: "" };
-    const id = spaces().find((s) => s.active)?.id; scans.push(id);
-    const out = { code: 0, stdout: (repos[id] ?? []).map((p) => `R\t${p}\tmain\t1\t0`).join("\n") + "\n" };
+    const id = spaces().find((s) => s.active)?.id; scans.push(id); clock += took * 1000;
+    if (fail[id] === "exit") return { code: 1, stdout: "", stderr: "ssh: connect: no route" };
+    if (fail[id] === "throw") throw new Error("timed out");
+    if (fail[id] === "partial") return { code: 143, stdout: `T\t${a[4]}\t${a[4]}\n` };
+    const out = { code: 0, stdout: `T\t${a[4]}\t/resolved/${id}\n` + (repos[id] ?? []).map((p) => `R\t${p}\tmain\t1\t0`).join("\n") + "\n" };
     return held ? new Promise((r) => held.push(() => r(out))) : out;
   };
   const fresh = () => { const timers = [], w = new View(), timedCx = { ...cx, timer: { every: (ms, f) => timers.push([ms, f]), after() {} } }; w.init({}, timedCx);
@@ -151,6 +158,8 @@ const changesCache = async () => {
       if (w.stale !== true) return `a kept list must still be rescanned (stale), got stale ${w.stale}`;
       const n = (globalThis.__execs ?? []).length; w.render(cx); w.render(cx);
       if ((globalThis.__execs ?? []).length !== n) return `a render with a kept list started ${(globalThis.__execs ?? []).length - n} exec(s)`;
+      // The kept "real" map (root as given -> resolved) comes back with the list, not B's (M13).
+      if (w.real?.[w.top()] !== `/resolved/${S}`) return `back on A, expected A's kept root mapping, got ${JSON.stringify(w.real)}`;
       return null;
     } finally { delete wt[B.id]; }
   };
@@ -173,9 +182,17 @@ const changesCache = async () => {
       held = []; w.findPlaces(cx); show(B); w.render(cx); w.stale = false; release(); await settle();
       if (w.placesFor !== B.id || paths(w) !== want(B.id)) return `a scan of A finishing on B: expected B's kept list, got placesFor ${w.placesFor} places ${paths(w)}`;
       if (w.stale !== true) return `the discarded scan of A must ask for another, got stale ${w.stale}`;
-      held = []; show(C); w.render(cx);
-      if (w.placesFor === C.id) return `a space never scanned shows a kept list (places ${paths(w)})`;
-      return null;
+      // C, never scanned, shares B's machine, folder and recorded worktrees: nothing is kept for it.
+      const wt = globalThis.__shared["project-agent.worktrees"]; wt[B.id] = wt[C.id] = [];
+      try {
+        show(C); w.render(cx);
+        if (w.placesFor === C.id) return `a space never scanned (same machine and folder as B) shows a kept list (places ${paths(w)})`;
+        w.findPlaces(cx); await settle();
+        if (w.placesFor !== C.id || paths(w) !== want(C.id)) return `C's own scan: expected C's list, got placesFor ${w.placesFor} places ${paths(w)}`;
+        held = []; show(B); w.render(cx);
+        if (w.placesFor !== B.id || paths(w) !== want(B.id)) return `C's scan replaced B's kept list (same machine and folder): got placesFor ${w.placesFor} places ${paths(w)}`;
+        return null;
+      } finally { delete wt[B.id]; delete wt[C.id]; }
     },
     // At most 8 spaces kept, the least recently shown dropped.
     "limit": async () => {
@@ -201,15 +218,84 @@ const changesCache = async () => {
       globalThis.__spaces = [nine[1]]; w.render(cx);
       return w.placesFor === nine[1].id ? "space 2, the least recently shown, was kept" : null;
     },
-    // C-remote-interval (AC6.2): three 20 s ticks rescan a remote space once and a local one three times.
+    // C-remote-interval (AC6.2): each scan takes 3 s and the 20 s ticks keep their own times (start + 20 s each).
+    // Three ticks (60 s) rescan a remote space once and a local one three times; six ticks (120 s): 2 and 6.
     "AC6.2": async () => {
-      for (const [s, n] of [[B, 1], [A, 3]]) {
-        show(s); clock = keep.now(); const w = fresh(); await settle(); scans.length = 0;
-        for (let i = 0; i < 3; i++) { clock += 20000; w.tick(20000); await settle(); }
-        const got = scans.filter((x) => x === s.id).length;
-        if (got !== n) return `${s.machine ? "remote" : "local"} space: expected ${n} scan(s) in three 20 s ticks, got ${got}`;
-      }
-      return null;
+      took = 3;
+      try {
+        for (const [s, n] of [[B, 1], [A, 3]]) {
+          show(s); const base = clock = keep.now(); const w = fresh(); await settle(); scans.length = 0;
+          for (let k = 1; k <= 6; k++) {
+            clock = base + 20000 * k; w.tick(20000); await settle();
+            const got = scans.filter((x) => x === s.id).length;
+            if (k === 3 && got !== n) return `${s.machine ? "remote" : "local"} space, 3 s scans: expected ${n} scan(s) in three 20 s ticks (60 s), got ${got}`;
+            if (k === 6 && got !== 2 * n) return `${s.machine ? "remote" : "local"} space, 3 s scans: expected ${2 * n} scan(s) in six 20 s ticks (120 s), got ${got}`;
+          }
+        }
+        return null;
+      } finally { took = 0; }
+    },
+    // C-M2: a scan that fails (non-zero exit, a throw or timeout, a killed scan) keeps the last good list and
+    // says it could not refresh, with the list's age; a scan that succeeds and finds nothing empties the list.
+    "failed scan": async () => {
+      const was = repos[B.id];
+      try {
+        show(B); const c0 = clock = keep.now(); const w = fresh(); await settle();
+        if (typeof w.placesNote !== "function") return "the view has no placesNote(spaceId) (the note shown when a scan failed)";
+        if (w.placesNote(B.id) !== null) return `a good scan must show no note, got ${JSON.stringify(w.placesNote(B.id))}`;
+        for (const mode of ["exit", "throw", "partial"]) {
+          fail[B.id] = mode; clock = c0 + 5 * 60000; w.findPlaces(cx); await settle();
+          if (w.placesFor !== B.id || paths(w) !== want(B.id)) return `${mode}: the last good list must stay, got placesFor ${w.placesFor} places ${paths(w)}`;
+          const note = w.placesNote(B.id);
+          if (!/could not refresh/i.test(note ?? "") || !/5 min/.test(note)) return `${mode}: expected a "could not refresh" note with the list's age (5 min), got ${JSON.stringify(note)}`;
+          show(A); w.render(cx); held = []; show(B); w.render(cx); release(); await settle();
+          if (w.placesFor !== B.id || paths(w) !== want(B.id)) return `${mode}: after a failed scan, a switch back lost the kept list (placesFor ${w.placesFor} places ${paths(w)})`;
+        }
+        fail[B.id] = null; repos[B.id] = []; w.findPlaces(cx); await settle();
+        if (w.placesFor !== B.id || w.places.length !== 0) return `a good scan that finds nothing must empty the list, got ${paths(w)}`;
+        if (w.placesNote(B.id) !== null) return `a good scan must clear the note, got ${JSON.stringify(w.placesNote(B.id))}`;
+        return null;
+      } finally { repos[B.id] = was; delete fail[B.id]; }
+    },
+    // M15: renders of the space already shown, with the 2 s stale tick between them, start no scan.
+    "steady": async () => {
+      show(B); const w = fresh(); await settle(); w.render(cx); w.stale = false; // the first render notes the recorded worktrees
+      scans.length = 0; const n = (globalThis.__execs ?? []).length;
+      for (let i = 0; i < 10; i++) { w.render(cx); w.tick(2000); await settle(); }
+      const execs = (globalThis.__execs ?? []).length - n;
+      return scans.length || execs ? `10 renders and 2 s ticks on the shown space started ${scans.length} scan(s), ${execs} exec(s)` : null;
+    },
+    // R7 (added by the person, 2026-11-16): while Changes is not the shown child of the side panel's stack (or the
+    // panel is hidden), it does no periodic work, local or remote; shown again, it shows what it kept at once and
+    // refreshes and scans at once (once each).
+    "R7 hidden": async () => {
+      const keepLayout = globalThis.__layout;
+      const panel = (active, hidden = false) => ({ id: "root", children: [{ id: "panel", hidden, children: [{ id: "panel-body", type: "stack", active,
+        children: [{ id: "changes", type: "block", content: { mod: "my-changes" } }, { id: "files", type: "block", content: { mod: "my-files" } }] }] }] });
+      const count = (from) => { const x = (globalThis.__execs ?? []).slice(from); return { all: x.length, scan: x.filter((e) => e[0] === "sh" && e[4] === "scan").length, refresh: x.filter((e) => e[0] === "git" && e.includes("--show-toplevel")).length }; };
+      try {
+        for (const [how, hide, wake] of [["another stack child", panel("files"), "render"], ["the panel hidden", panel("changes", true), "render"], ["another stack child", panel("files"), "2 s tick"]]) {
+          for (const s of [B, A]) {
+            globalThis.__layout = panel("changes"); show(s); const base = clock = keep.now(); const w = fresh(); await settle(); w.render(cx); await settle();
+            if (w.placesFor !== s.id) return `setup (${s.machine ? "remote" : "local"}): the first scan did not commit`;
+            globalThis.__layout = hide; const n = (globalThis.__execs ?? []).length;
+            // Three simulated minutes: every timer at its own pace, renders, a change notice (stale) and a folder-watch refresh.
+            for (let k = 1; k <= 90; k++) {
+              clock = base + 2000 * k; w.tick(2000); if (k % 5 === 0) w.tick(10000); if (k % 10 === 0) w.tick(20000);
+              if (k === 30) w.stale = true; if (k === 40) w.refresh(cx); w.render(cx); await settle();
+            }
+            const hidden = count(n);
+            if (hidden.all) return `${s.machine ? "remote" : "local"}, ${how}: expected no exec in 3 min while hidden, got ${hidden.all} (${hidden.scan} scan(s), ${hidden.refresh} refresh(es))`;
+            globalThis.__layout = panel("changes"); const m = (globalThis.__execs ?? []).length;
+            if (wake === "render") w.render(cx); else w.tick(2000);
+            if (w.placesFor !== s.id || paths(w) !== want(s.id)) return `${how}: shown again, expected the kept list at once, got placesFor ${w.placesFor} places ${paths(w)}`;
+            await settle(); w.tick(2000); await settle(); w.render(cx); await settle();
+            const shown = count(m);
+            if (shown.scan !== 1 || shown.refresh !== 1) return `${s.machine ? "remote" : "local"}, ${how}, shown again by a ${wake}: expected 1 scan and 1 refresh at once, got ${shown.scan} scan(s), ${shown.refresh} refresh(es)`;
+          }
+        }
+        return null;
+      } finally { globalThis.__layout = keepLayout; }
     },
     // A switch, and the stale flag, still rescan a remote space at once, however young its list.
     "AC6.2 forced": async () => {
@@ -230,7 +316,8 @@ const changesCache = async () => {
   } finally { release(); Date.now = keep.now; globalThis.__fakeExec = undefined; globalThis.__spaces = keep.spaces; }
   return errs.length ? errs.join("\n  ") : null;
 };
-if (mod === "my-changes") { const ac32 = after[mod]; after[mod] = async (v) => (await ac32(v)) ?? changesCache(); }
+// Both run: a failing AC3.2 does not hide the R6 results.
+if (mod === "my-changes") { const ac32 = after[mod]; after[mod] = async (v) => [await ac32(v), await changesCache()].filter(Boolean).join("\n  ") || null; }
 // t-010: a machine whose login sh has no ~/.local/bin on PATH (the remote desktop) still gets the
 // launcher when pa-session is installed there; a "not installed" answer is checked again later.
 // The real sh runs, with HOME a temp folder and a PATH without pa-session.

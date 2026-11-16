@@ -85,13 +85,14 @@ export default class Changes extends View {
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.places = []; // [{ path, branch, count, task }] repositories this space's work is in
+    this.placesBy = new Map(); // space id -> { places, real, at }: the last scan of each space, 8 at most, oldest shown dropped
     this.layout = ["list", "tasks"].includes(localStorage.getItem("places.layout")) ? localStorage.getItem("places.layout") : "tree";
     this.all = localStorage.getItem("places.all") === "1"; // show repositories without changes too
     this.foldedDirs = new Set(JSON.parse(localStorage.getItem("places.closed") ?? "[]")); // folded tree folders
     this.refresh(cx);
     this.findPlaces(cx);
     cx.timer.every(10000, (cx) => this.refresh(cx));
-    cx.timer.every(20000, (cx) => this.findPlaces(cx));
+    cx.timer.every(20000, (cx) => this.findPlaces(cx, { tick: true }));
     cx.timer.every(2000, (cx) => { if (this.stale) { this.stale = false; this.findPlaces(cx); } });
     this.scope = null; // "work": uncommitted changes; "branch": everything since the base branch; null: decided per repository
   }
@@ -117,11 +118,16 @@ export default class Changes extends View {
   // Every repository under the top folder, the focused folder and each worktree a Project Agent
   // recorded for this space (shared "project-agent.worktrees"), plus those repositories' own git
   // worktrees wherever they live.
-  findPlaces(cx) {
+  // The 20 s timer passes tick: a space on another machine is then looked at again only once its
+  // list is a minute old (a scan there takes seconds). Anything else (a switch, the stale flag,
+  // Refresh) looks now.
+  findPlaces(cx, { tick = false } = {}) {
     const at = here(), top = this.top();
+    this.restore(at.space);
+    const space = spaces().find((s) => s.active), on = space?.machine ?? null;
+    if (tick && on && Date.now() - (this.placesBy.get(at.space)?.at ?? -Infinity) < 60000) return;
     if (!(top || at.cwd) || this.finding) return;
     this.finding = true;
-    const space = spaces().find((s) => s.active), on = space?.machine ?? null;
     const trees = (shared("project-agent.worktrees") ?? {})[at.space] ?? [];
     const inside = (p, dir) => p === dir || p.startsWith(`${dir}/`);
     // Roots: the top folder, then anything not already inside an earlier root.
@@ -148,8 +154,19 @@ export default class Changes extends View {
       for (const p of found.values()) p.task = trees.find((w) => inside(p.path, w.path) || inside(p.path, real[w.path] ?? w.path))?.task ?? null;
       this.places = [...found.values()].sort((x, y) => this.rel(x.path).localeCompare(this.rel(y.path)));
       this.placesFor = at.space;
+      this.placesBy.delete(at.space); this.placesBy.set(at.space, { places: this.places, real, at: Date.now() });
+      while (this.placesBy.size > 8) this.placesBy.delete(this.placesBy.keys().next().value);
       cx.notify();
     });
+  }
+
+  // Shows the list kept for a space shown again at once (no exec), and asks for a new scan of it.
+  // An empty list shows nothing, so it is left to the scan as before.
+  restore(id) {
+    const kept = this.placesBy.get(id);
+    if (!kept?.places.length || this.placesFor === id) return;
+    this.places = kept.places; this.real = kept.real; this.placesFor = id; this.stale = true;
+    this.placesBy.delete(id); this.placesBy.set(id, kept); // now the most recently shown
   }
 
   pin(path, cx) {
@@ -481,6 +498,7 @@ export default class Changes extends View {
 
   render(cx) {
     if (key() !== this.context) this.refresh(cx);
+    this.restore(here().space);
     const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
     const enabled = Boolean(this.message.trim() && this.root && !this.busy && !this.loading);
     return v_flex().id("changes").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)

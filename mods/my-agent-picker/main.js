@@ -22,17 +22,28 @@ const BAR = 28; // px: the task bar of the shown worker, which stays when the li
 
 function findNode(n, id) { if (n?.id === id) return n; for (const c of n?.children ?? []) { const f = findNode(c, id); if (f) return f; } return null; }
 
-// Whether a terminal belongs to the space: a row of the picker, or its parent chain (6 hops, as in
-// Changes) reaches a terminal in one of the space's tabs or an agent of the space. The same workers
-// Changes and Files offer, so one they show is never hidden.
+// Whether a terminal belongs to the space: a row of the picker, a worker the Project Agent recorded
+// for the space (what Files offers), or its parent chain (the terminal and up to 6 parents, live or
+// not) reaches a terminal in one of the space's tabs (what Changes offers) or an agent of the space.
+// Accepts at least every worker Changes and Files link to, so one they show is never hidden.
 function inSpace(space, all, rows, address) {
-  if (rows.some((r) => r.address === address)) return true;
+  if (rows.some((r) => r.address === address) || taskOf(space, address)) return true;
   const tabs = new Set((space.tabs ?? []).map((x) => x.id));
   const roots = new Set(panes().filter((p) => tabs.has(p.tab) && p.terminal).map((p) => p.terminal));
   for (const a of agents()) if (a.space === space.id) roots.add(a.address);
   let x = all.find((k) => k.address === address);
-  for (let hops = 0; x && hops <= 6; hops += 1, x = x.parent ? all.find((k) => k.address === x.parent) : null) if (roots.has(x.address)) return true;
+  for (let hops = 0; x && hops <= 6; hops += 1) {
+    if (roots.has(x.address)) return true;
+    x = x.parent ? all.find((k) => k.address === x.parent) : null;
+  }
   return false;
+}
+
+// Whether Herdr has reported the space's panes yet (a space with tabs always has some). Until then
+// membership cannot be judged.
+function panesKnown(space) {
+  const tabs = new Set((space.tabs ?? []).map((x) => x.id));
+  return !tabs.size || panes().some((p) => tabs.has(p.tab));
 }
 
 // Point the live block at one terminal. Herdr can drop that block when its terminal ends,
@@ -100,9 +111,9 @@ export default class AgentPicker extends View {
     }
 
     // The live block shows another space's worker (left over from a switch or a restart): hide it.
-    // A terminal not reported yet (still loading) waits until it is.
+    // A terminal not reported yet, or the space's panes not reported yet (still loading), waits until they are.
     const shownTerm = selected ? all.find((k) => k.address === selected) : null;
-    if (space && shownTerm && (shownTerm.state !== "live" || !inSpace(space, all, rows, selected)) && this.hid !== selected) {
+    if (space && shownTerm && (shownTerm.state !== "live" || (panesKnown(space) && !inSpace(space, all, rows, selected))) && this.hid !== selected) {
       this.hid = selected; run("layout.hide", { id: "agents-live" });
     }
     if (!selected) this.hid = null;

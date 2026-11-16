@@ -186,6 +186,7 @@ const launcherNoisy = async (v) => {
   const ESC = "\x1b]0;title\x07", cases = [
     [{ code: 0, stdout: `${ESC}\n@pa-launcher:pa-session\n` }, ["pa-session", "--ask"]],
     [{ code: 0, stdout: "Welcome\n@pa-launcher:/h/.local/bin/pa-session\n" }, ["/h/.local/bin/pa-session", "--ask"]],
+    [{ code: 0, stdout: "\n@pa-launcher:pa-session\nlogout banner\n" }, ["pa-session", "--ask"]], // output after the marker (an exit trap)
     [{ code: 0, stdout: `${ESC}pa-session\n` }, null], [{ code: 0, stdout: "pa-session\n" }, null], [{ code: 0, stdout: "" }, null],
     [{ code: 1, stdout: "\n@pa-launcher:pa-session\n" }, null], [{ code: 0, stdout: "\n@pa-launcher:rel/pa-session\n" }, null],
     [{ code: 0, stdout: "\n@pa-launcher:/a/pa-session-old\n" }, null], [{ code: 0, stdout: `\n@pa-launcher:/a${ESC}/pa-session\n` }, null],

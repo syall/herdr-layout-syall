@@ -9,9 +9,9 @@ export const EditorState = { new: () => ({ release() {} }) }, ScrollHandle = { n
 globalThis.localStorage = { getItem: () => null, setItem() {} };
 const S = globalThis.__shared ??= {};
 export const shared = (k) => S[k], setShared = (k, v) => { S[k] = v; };
-export const spaces = () => globalThis.__spaces ?? [], panes = () => globalThis.__panes ?? [], terminals = () => globalThis.__terminals ?? [], agents = () => [], machines = () => [{ name: null, layout: "ready" }];
+export const spaces = () => globalThis.__spaces ?? [], panes = () => globalThis.__panes ?? [], terminals = () => globalThis.__terminals ?? [], agents = () => globalThis.__agents ?? [], machines = () => [{ name: null, layout: "ready" }];
 export const focused = () => globalThis.__focused ?? null, layout = () => globalThis.__layout ?? ({ id: "root", children: [] }), theme = () => new Proxy({}, { get: () => "#000000" }), settings = () => ({ zoom: 1 }), window = () => ({ platform: "macos" });
-export const home = () => process.env.HOME, props = () => globalThis.__props ?? {}, run = () => null, notify = () => "", openOverlay = () => "o", closeOverlay = () => null, knownAgents = async () => [], nextCommand = () => new Promise(() => {}), watchFolder = () => new Promise(() => {}), pickFolder = async () => null, keys = () => [];
+export const home = () => process.env.HOME, props = () => globalThis.__props ?? {}, run = (name, args) => { (globalThis.__runs ??= []).push({ name, args }); return null; }, notify = () => "", openOverlay = () => "o", closeOverlay = () => null, knownAgents = async () => [], nextCommand = () => new Promise(() => {}), watchFolder = () => new Promise(() => {}), pickFolder = async () => null, keys = () => [];
 import fs from "fs"; import { spawnSync } from "child_process";
 export const readTextFile = async (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return null; } }, writeTextFile = async () => null;
-export const exec = async (c, a = []) => { const r = spawnSync(c, a, { encoding: "utf8" }); return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" }; }, hc = async () => ({ code: 0, stdout: "", stderr: "" });
+export const exec = async (c, a = []) => { globalThis.__onExec?.(c, a); const r = spawnSync(c, a, { encoding: "utf8" }); return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" }; }, hc = async () => ({ code: 0, stdout: "", stderr: "" });

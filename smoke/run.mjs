@@ -41,7 +41,67 @@ const states = {
 };
 if (v.worker) states[mod] = [() => {}, (v) => { v.worker.info = { address: "t2", state: "live", task: "t-001", title: "x", role: "build", onlyWorker: true, worktree: { path: "/w", kind: "worktree", uncommitted: 2, unpushed: 1, removesBranches: false, branch: "b", sharedWith: [], keep: false } }; },
   (v) => { v.worker.info.worktree.sharedWith = ["t9"]; v.worker.withTask = true; v.worker.error = "x"; }, (v) => { v.worker.info.worktree = null; }];
-let n = 0;
-for (const prep of states[mod] ?? [() => {}]) { prep(v); v.render(cx); n += 1; }
+// t-002: checks run after a state's render, given the run() calls that render made: an error message, or null.
+const checks = {}, after = {};
+const live = () => globalThis.__layout.children[0].children[0].children[1], term = (a) => globalThis.__terminals.find((k) => k.address === a);
+const hides = (runs) => runs.filter((r) => r.name === "layout.hide" && JSON.stringify(r.args) === JSON.stringify({ id: "agents-live" }));
+const layoutCalls = (runs) => runs.filter((r) => r.name.startsWith("layout."));
+const only = (runs) => runs.filter((r) => !["layout.hide", "layout.resize"].includes(r.name)).map((r) => r.name);
+const expectHides = (n, ac) => (_v, runs) => only(runs).length ? `AC4.3 unexpected run(): ${only(runs)}` : layoutCalls(runs).length !== n || hides(runs).length !== n ? `${ac} expected ${n} layout.hide {id:"agents-live"}, got ${JSON.stringify(runs)}` : null;
+const show = (address, hidden = false) => { live().content = { terminal: address }; live().hidden = hidden; };
+if (mod === "my-agent-picker") {
+  const extra = [
+    // (a) a worker of this space
+    [() => { globalThis.__layout.children[0].children[0].children[0].size.px = 200; globalThis.__agents = [{ address: "t1", space: S, status: "working", program: { name: "Claude Code" } }]; show("t2"); }, expectHides(0, "AC1.1")],
+    // (b) a live worker of another space
+    [() => { globalThis.__terminals.push({ address: "m/t9", state: "live", parent: "m/t8", status: "working", program: { agent: true }, labels: {} }); show("m/t9"); }, expectHides(1, "AC1.2")],
+    // (c1) Herdr renders again before the layout updates; (c2) the node is hidden
+    [() => {}, expectHides(0, "AC1.3 (guard)")],
+    [() => { show("m/t9", true); }, expectHides(0, "AC1.3 (hidden)")],
+    // (d) reported but not live
+    [() => { term("t2").state = "exited"; show("t2"); }, expectHides(1, "AC1.4")],
+    // (e) not reported yet
+    [() => { term("t2").state = "live"; show("zz/t1"); }, expectHides(0, "AC1.5")],
+    // (f) in this space only through a pane's terminal (not an agent)
+    [() => { show("t3"); }, expectHides(0, "AC1.6 (pane parent)")],
+    // (g) hidden, then a pick shows a worker of this space again
+    [() => { show("m/t9"); }, expectHides(1, "AC1.2 (setup for AC1.6)")],
+    [() => { show("t2"); }, expectHides(0, "AC1.6 (after a pick)")],
+    [() => {}, expectHides(0, "AC1.6 (next render)")],
+    // (h) an agent of this space with no parent in its tabs
+    [() => { globalThis.__agents.push({ address: "r/t5", space: S, status: "idle" }); globalThis.__terminals.push({ address: "r/t5", state: "live", status: "idle", program: { agent: true }, labels: {} }); show("r/t5"); }, expectHides(0, "AC1.6 (agent of the space)")],
+  ];
+  checks[mod] = [...states[mod].map(() => null), ...extra.map((x) => x[1])];
+  states[mod] = [...states[mod], ...extra.map((x) => x[0])];
+}
+if (mod === "my-changes") {
+  const base = states[mod][0];
+  const stale = (want, ac) => (v, runs) => runs.length ? `AC4.3 unexpected run(): ${runs.map((r) => r.name)}` : v.stale !== want ? `${ac} expected stale === ${want}, got ${v.stale}` : null;
+  const extra = [
+    [(v) => { base(v); v.stale = false; v.placesFor = "other"; v.finding = false; }, stale(true, "AC3.1")],
+    [(v) => { v.stale = false; v.places = []; v.finding = false; }, stale(true, "AC3.1 (fewer than 2 places)")],
+    [(v) => { base(v); v.stale = false; v.render(cx); v.stale = false; }, stale(false, "AC3.3")],
+  ];
+  checks[mod] = [...states[mod].map(() => null), ...extra.map((x) => x[1])];
+  states[mod] = [...states[mod], ...extra.map((x) => x[0])];
+  // AC3.2: the space changes while a scan runs; the discarded scan must ask for another.
+  after[mod] = async (v) => {
+    const keep = globalThis.__spaces;
+    v.finding = false; v.stale = false; v.placesFor = S;
+    globalThis.__onExec = () => { globalThis.__spaces = [{ ...keep[0], active: false }, { id: "sp2", name: "other", active: true, machine: null, folder: top, tabs: [] }]; };
+    v.findPlaces(cx);
+    await new Promise((r) => setTimeout(r, 300));
+    globalThis.__onExec = undefined; globalThis.__spaces = keep;
+    return v.placesFor === "sp2" ? "AC3.2 the scan for the old space was not discarded" : v.stale !== true ? `AC3.2 expected stale === true after a discarded scan, got ${v.stale}` : null;
+  };
+}
+let n = 0, failed = 0;
+const fail = (msg) => { console.log(`FAIL ${mod} ${msg}`); failed += 1; process.exitCode = 1; };
+for (const [i, prep] of (states[mod] ?? [() => {}]).entries()) {
+  prep(v); globalThis.__runs = []; v.render(cx); n += 1;
+  const err = checks[mod]?.[i]?.(v, globalThis.__runs);
+  if (err) fail(`state ${i}: ${err}`);
+}
 await new Promise((r) => setTimeout(r, 300));
-console.log(`${mod}: rendered ${n} state(s) without an error`);
+if (after[mod]) { const err = await after[mod](v); if (err) fail(`after: ${err}`); }
+console.log(`${mod}: rendered ${n} state(s) ${failed ? `with ${failed} failure(s)` : "without an error"}`);

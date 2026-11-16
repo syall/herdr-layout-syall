@@ -16,6 +16,8 @@ globalThis.__shared = { "project-agent.tabs": { tb1: { space: S, project: top, p
   "project-agent.workers": { [S]: { t2: { task: "t-001", title: "Add retry", role: "build", state: "in-progress" } } }, "space.home": {}, "my-files.places": { [S]: [{ label: "All evidence", path: "/e", group: "Project Agent" }, { label: "t-001 evidence · 2 files", detail: "Add retry", path: "/e/t-001", group: "Project Agent", task: "t-001" }] }, "project-agent.show": { space: S, task: "t-001", at: 1 } };
 globalThis.__layout = { id: "root", children: [{ id: "panel-body", children: [{ id: "agents-view", children: [{ id: "agents-picker", size: { px: 200 } }, { id: "agents-live", content: { terminal: "t2" } }] }] }] };
 if (mod === "my-toast") globalThis.__props = { title: "Claude Code finished", body: "done", level: "success", action: { name: "agent.focus", args: { terminal: "t2" } }, overlay: "o1" };
+// my-toast: no process at all (a real notifier would post on the desktop and its click would reach the live Herdr).
+if (mod === "my-toast") globalThis.__noSpawn = true;
 if (mod === "project-agent" && process.argv[3] === "delete-worker") globalThis.__props = { deleteWorker: { space: S, machine: null, address: "t2", name: "t-001-build" } };
 const { cx } = await import("./stubs.mjs");
 const View = (await import(`./.run/${mod}/main.js`)).default, v = new View();
@@ -111,6 +113,7 @@ if (mod === "my-changes") {
     return v.places !== before || v.placesFor !== S ? "AC3.2 the scan for the old space was not discarded" : v.stale !== true ? `AC3.2 expected stale === true after a discarded scan, got ${v.stale}` : null;
   };
 }
+if (mod === "my-toast") after[mod] = async () => (globalThis.__execs ?? []).length ? `I1 my-toast tried to start a process: ${globalThis.__execs.map((x) => x[0]).join(", ")}` : null;
 let n = 0, failed = 0;
 const fail = (msg) => { console.log(`FAIL ${mod} ${msg}`); failed += 1; process.exitCode = 1; };
 for (const [i, prep] of (states[mod] ?? [() => {}]).entries()) {

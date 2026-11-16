@@ -136,7 +136,49 @@ const launcherCase = async (newSpaceRun) => {
     return null;
   } finally { Date.now = now; process.env.HOME = keep.HOME; process.env.PATH = keep.PATH; }
 };
-if (mod === "my-spaces") after[mod] = async (v) => { v.launcher = {}; return launcherCase((m) => v.newSpaceRun(m, cx)); };
+// t-010 test gaps (VERIFY.md mutations M3, M3b, M3c, M4, M6b, M6c, M7, M8, M9): exec counts, a thrown check,
+// the plain name on PATH, the fallback, and the shared "my-spaces.launcher" answers per machine.
+const launcherMore = async (v) => {
+  const keep = { HOME: process.env.HOME, PATH: process.env.PATH }, now = Date.now, h = `${here}/.run/home-t010b`;
+  const wait = () => new Promise((r) => setTimeout(r, 400)), same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const shs = (m) => (globalThis.__execs ?? []).filter((x) => x[0] === "sh").length, run = (m) => v.newSpaceRun(m, cx), many = (m, k = 10) => { for (let i = 0; i < k; i++) run(m); };
+  const L = () => globalThis.__shared["my-spaces.launcher"] ?? {};
+  fs.rmSync(h, { recursive: true, force: true }); fs.mkdirSync(`${h}/.local/bin`, { recursive: true }); fs.mkdirSync(`${h}/onpath`, { recursive: true });
+  process.env.HOME = h; process.env.PATH = "/usr/bin:/bin";
+  v.launcher = {}; globalThis.__shared["my-spaces.launcher"] = { other: ["/o/pa-session", "--ask"] };
+  try {
+    // Neither found: the Claude entry, shared null, other machines' answers kept (M7, M8, M9).
+    let n = shs(); many("n1"); await wait();
+    if (shs() - n !== 1) return `t-010 first check: expected 1 sh for 10 calls, got ${shs() - n} (M3b)`;
+    if (!same(run("n1"), v.claudeRun) || !v.claudeRun) return `t-010 no launcher: expected the Claude entry ${JSON.stringify(v.claudeRun)}, got ${JSON.stringify(run("n1"))} (M7)`;
+    if (!("n1" in L()) || L().n1 !== null) return `t-010 no launcher: expected shared my-spaces.launcher.n1 === null, got ${JSON.stringify(L())} (M8)`;
+    if (!same(L().other, ["/o/pa-session", "--ask"])) return `t-010 the shared write dropped another machine's answer: ${JSON.stringify(L())} (M9)`;
+    // A fresh "no" is not checked again on every call (M3, M3b).
+    await wait(); n = shs(); many("n1"); await wait(); // settle first: the checks above call newSpaceRun too
+    if (shs() !== n) return `t-010 a fresh "no launcher" was checked again within the interval: ${shs() - n} sh (M3)`;
+    // Found on PATH (this computer, key ""): the plain name, shared under "" (M6b, M6c, M8).
+    fs.writeFileSync(`${h}/onpath/pa-session`, "#!/bin/sh\n", { mode: 0o755 }); process.env.PATH = `${h}/onpath:/usr/bin:/bin`;
+    run(null); await wait();
+    if (!same(run(null), ["pa-session", "--ask"])) return `t-010 pa-session on PATH: expected ["pa-session","--ask"], got ${JSON.stringify(run(null))} (M6b, M6c)`;
+    if (!same(L()[""], ["pa-session", "--ask"]) || L().n1 !== null || !L().other) return `t-010 shared my-spaces.launcher after a local answer: ${JSON.stringify(L())} (M8, M9)`;
+    // After the interval: one re-check for the "no" (in flight once), none for a positive answer (M3b, M3c).
+    Date.now = () => now() + 61000;
+    n = shs(); many("n1"); many(null); await wait();
+    if (shs() - n !== 1) return `t-010 after the interval: expected 1 sh (one re-check of n1, none of the positive ""), got ${shs() - n} (M3b, M3c)`;
+    n = shs(); many("n1"); many(null); await wait();
+    if (shs() !== n) return `t-010 just re-checked: expected no sh, got ${shs() - n} (M3)`;
+    // A thrown check is forgotten, not cached: the next call checks again (M4).
+    globalThis.__onExec = (c) => { if (c === "sh") throw new Error("smoke: unreachable"); };
+    n = shs(); run("t1"); await wait();
+    globalThis.__onExec = undefined;
+    if (v.launcher.t1 !== undefined) return `t-010 a thrown check was kept: launcher.t1 = ${JSON.stringify(v.launcher.t1)} (M4)`;
+    if ("t1" in L()) return `t-010 a thrown check was shared: ${JSON.stringify(L())} (M4)`;
+    run("t1"); await wait(); // __onExec throws before the stub records the call: only this retry is counted
+    if (shs() - n !== 1) return `t-010 after a thrown check the next call did not check again: ${shs() - n} sh (M4)`;
+    return null;
+  } finally { Date.now = now; globalThis.__onExec = undefined; process.env.HOME = keep.HOME; process.env.PATH = keep.PATH; }
+};
+if (mod === "my-spaces") after[mod] = async (v) => { v.launcher = {}; return (await launcherCase((m) => v.newSpaceRun(m, cx))) ?? launcherMore(v); };
 // t-010 (my-new-menu): New space on a remote machine runs the launcher there too, not a plain shell.
 if (mod === "my-new-menu") after[mod] = async (v) => {
   if (typeof v.newSpaceArgs !== "function") return "t-010 my-new-menu has no newSpaceArgs(space)";
@@ -145,6 +187,18 @@ if (mod === "my-new-menu") after[mod] = async (v) => {
   if (JSON.stringify(remote) !== JSON.stringify({ argv: ["/x/pa-session", "--ask"] })) return `t-010 remote New space expected the launcher, got ${JSON.stringify(remote)}`;
   if (JSON.stringify(local) !== JSON.stringify({ argv: ["pa-session", "--ask"] })) return `t-010 local New space expected pa-session --ask, got ${JSON.stringify(local)}`;
   if (JSON.stringify(unknown) !== "{}") return `t-010 remote New space with no launcher known expected {}, got ${JSON.stringify(unknown)}`;
+  // The New space row really runs space.new with newSpaceArgs (M5b): render with the row's action captured, then run it.
+  const keep = globalThis.__spaces, row = v.row; let action = null;
+  v.row = function (id, icon, name, act, ...rest) { if (id === "space") action = act; return row.call(this, id, icon, name, act, ...rest); };
+  try {
+    for (const [sp, want] of [[{ id: "m9/sp9", name: "r", active: true, machine: "m9", folder: "/r", tabs: [] }, { argv: ["/x/pa-session", "--ask"] }], [{ ...keep[0] }, { argv: ["pa-session", "--ask"] }]]) {
+      globalThis.__spaces = [sp]; action = null; v.render(cx);
+      if (!action) return "t-010 my-new-menu renders no New space row (id space)";
+      globalThis.__runs = []; action();
+      const got = globalThis.__runs.filter((r) => r.name === "space.new");
+      if (got.length !== 1 || JSON.stringify(got[0].args) !== JSON.stringify(want)) return `t-010 New space row (${sp.machine ?? "local"}) expected space.new ${JSON.stringify(want)}, got ${JSON.stringify(globalThis.__runs)} (M5b)`;
+    }
+  } finally { v.row = row; globalThis.__spaces = keep; }
   return null;
 };
 if (mod === "my-toast") after[mod] = async () => (globalThis.__execs ?? []).length ? `I1 my-toast tried to start a process: ${globalThis.__execs.map((x) => x[0]).join(", ")}` : null;

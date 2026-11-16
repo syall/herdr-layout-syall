@@ -143,7 +143,7 @@ export default class Changes extends View {
         if (more.length) read((await exec("sh", ["-c", SCAN, "sh", "status", ...more], { on, timeout: 60000 })).stdout);
       } catch {}
       this.finding = false;
-      if (spaces().find((s) => s.active)?.id !== at.space) return;
+      if (spaces().find((s) => s.active)?.id !== at.space) { this.stale = true; return; } // the space changed: look again
       this.real = real;
       for (const p of found.values()) p.task = trees.find((w) => inside(p.path, w.path) || inside(p.path, real[w.path] ?? w.path))?.task ?? null;
       this.places = [...found.values()].sort((x, y) => this.rel(x.path).localeCompare(this.rel(y.path)));
@@ -217,6 +217,7 @@ export default class Changes extends View {
     // Listed: uncommitted files, commits that are on no remote yet, a task's worktree, or an agent at work there.
     const active = (p) => p.count > 0 || p.ahead > 0 || Boolean(p.task) || crew.some((w) => near(w.cwd, p.path));
     const shown = this.all ? mine : mine.filter((p) => active(p) || p.path === pin);
+    if (this.placesFor !== at.space && !this.finding) this.stale = true; // another space: look now, not in 20 s
     if (mine.length < 2 && !pin) return null; // one repository: nothing to choose
     // New worktrees: look again as soon as the Project Agent records one.
     const recorded = JSON.stringify((shared("project-agent.worktrees") ?? {})[at.space] ?? []);

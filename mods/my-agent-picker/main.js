@@ -1,11 +1,12 @@
 // Agent picker for the Agents view: this space's agents and their workers (sub-agents).
 // Only workers can be picked; main agents are group labels. Picking one shows its live terminal
 // in the block below (layout.set; the main area stays put).
-// The header folds the list away. Reads only Herdr's live data; runs no programs and reads no files.
+// The header folds the list away. It hides that block when its worker is not in the shown space
+// (left over from a space switch or a restart). Reads only Herdr's live data; runs no programs and reads no files.
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, spaces, run, theme, layout, shared, setShared, openOverlay } from "herdr";
+import { agents, terminals, spaces, panes, run, theme, layout, shared, setShared, openOverlay } from "herdr";
 
 // The task a worker belongs to, from the Project Agent (shared "project-agent.workers":
 // { space: { address: { task, title, role } } }); null for agents it did not start.
@@ -20,6 +21,19 @@ const FOLDED = 30; // px: just the header
 const BAR = 28; // px: the task bar of the shown worker, which stays when the list is folded
 
 function findNode(n, id) { if (n?.id === id) return n; for (const c of n?.children ?? []) { const f = findNode(c, id); if (f) return f; } return null; }
+
+// Whether a terminal belongs to the space: a row of the picker, or its parent chain (6 hops, as in
+// Changes) reaches a terminal in one of the space's tabs or an agent of the space. The same workers
+// Changes and Files offer, so one they show is never hidden.
+function inSpace(space, all, rows, address) {
+  if (rows.some((r) => r.address === address)) return true;
+  const tabs = new Set((space.tabs ?? []).map((x) => x.id));
+  const roots = new Set(panes().filter((p) => tabs.has(p.tab) && p.terminal).map((p) => p.terminal));
+  for (const a of agents()) if (a.space === space.id) roots.add(a.address);
+  let x = all.find((k) => k.address === address);
+  for (let hops = 0; x && hops <= 6; hops += 1, x = x.parent ? all.find((k) => k.address === x.parent) : null) if (roots.has(x.address)) return true;
+  return false;
+}
 
 // Point the live block at one terminal. Herdr can drop that block when its terminal ends,
 // so put it back under the picker if it's missing.
@@ -52,6 +66,7 @@ const label = (x, ...fallbacks) => telling(x.title, x.program) ?? fallbacks.find
 export default class AgentPicker extends View {
   init() {
     this.armed = null; // worker armed for close (second click ends it)
+    this.hid = null; // the terminal this view last hid, so a render before the layout updates does not hide it again
     this.open = Number(localStorage.getItem("openPx")) || 180;
   }
 
@@ -83,6 +98,14 @@ export default class AgentPicker extends View {
       rows.push({ address: a.address, name: label(a, a.tab_name), status: a.status, app: a.program?.name ?? a.app, depth: 0 });
       addKids(a.address, 1);
     }
+
+    // The live block shows another space's worker (left over from a switch or a restart): hide it.
+    // A terminal not reported yet (still loading) waits until it is.
+    const shownTerm = selected ? all.find((k) => k.address === selected) : null;
+    if (space && shownTerm && (shownTerm.state !== "live" || !inSpace(space, all, rows, selected)) && this.hid !== selected) {
+      this.hid = selected; run("layout.hide", { id: "agents-live" });
+    }
+    if (!selected) this.hid = null;
 
     const toggle = () => {
       if (folded) run("layout.resize", { id: "agents-picker", px: Math.max(this.open, FOLDED + BAR + 40) });

@@ -35,8 +35,18 @@ const base = (path) => path.replace(/\/+$/, "").split("/").pop();
 // Changes made outside Herdr (an editor's save, a commit in another app): looked
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
-// How a new space finds the Project Agent launcher on a machine: prints the name or path to run.
-const FIND_LAUNCHER = 'if command -v pa-session >/dev/null 2>&1; then echo pa-session; elif [ -x "$HOME/.local/bin/pa-session" ]; then echo "$HOME/.local/bin/pa-session"; else exit 1; fi';
+// How a new space finds the Project Agent launcher on a machine: prints the name or path to run on a
+// marked line of its own (a login profile may print first, even without a newline).
+const MARK_LAUNCHER = "@pa-launcher:";
+const FIND_LAUNCHER = `if command -v pa-session >/dev/null 2>&1; then p=pa-session; elif [ -x "$HOME/.local/bin/pa-session" ]; then p="$HOME/.local/bin/pa-session"; else exit 1; fi; printf '\\n${MARK_LAUNCHER}%s\\n' "$p"`;
+// The launcher argv from that check's result, or null: only exit 0 with a marked line naming pa-session
+// or an absolute path ending in /pa-session (no control characters) counts.
+export function launcherFrom(r) {
+  if (r?.code !== 0) return null;
+  const line = String(r.stdout ?? "").split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => l.startsWith(MARK_LAUNCHER)).pop();
+  const p = line?.slice(MARK_LAUNCHER.length);
+  return p === "pa-session" || /^\/[^\x00-\x1f\x7f]*\/pa-session$/.test(p ?? "") ? [p, "--ask"] : null;
+}
 const LAUNCHER_RECHECK = 60000;
 
 // What a stored color name looks like on an avatar (the same in every mod
@@ -95,8 +105,7 @@ export default class Spaces extends View {
       cx.spawn(async () => {
         try {
           const r = await exec("sh", ["-lc", FIND_LAUNCHER], { on: machine || null, timeout: 10000 });
-          const found = r.code === 0 ? (r.stdout ?? "").trim().split("\n").pop() : "";
-          const run = found ? [found, "--ask"] : null;
+          const run = launcherFrom(r);
           this.launcher[key] = { run, at: Date.now() };
           setShared("my-spaces.launcher", { ...(shared("my-spaces.launcher") ?? {}), [key]: run });
         }

@@ -113,6 +113,105 @@ if (mod === "my-changes") {
     return v.places !== before || v.placesFor !== S ? "AC3.2 the scan for the old space was not discarded" : v.stale !== true ? `AC3.2 expected stale === true after a discarded scan, got ${v.stale}` : null;
   };
 }
+// t-012 R6: Changes keeps its repository list per space (at most 8), shows it at once when the space is
+// shown again, and the 20 s timer rescans a space on another machine only once its list is 60 s old.
+// SCAN is answered by __fakeExec with canned "R" lines for the space shown when the scan starts.
+// Each part starts from a new view; every failure is reported.
+const changesCache = async () => {
+  const keep = { spaces: globalThis.__spaces, now: Date.now }, { spaces } = await import("./stubs.mjs");
+  const A = { ...keep.spaces[0] }, sp = (id, machine) => ({ id, name: id, active: true, machine, folder: `/home/u/${id}`, tabs: [] });
+  const B = sp("m1/sp2", "m1"), C = sp("m1/sp3", "m1");
+  const repos = { [S]: [`${top}/src/A`, `${top}/src/A2`], [B.id]: ["/home/u/m1/sp2/x", "/home/u/m1/sp2/y"], [C.id]: ["/home/u/m1/sp3/z", "/home/u/m1/sp3/w"] };
+  const show = (s) => { globalThis.__spaces = [...[A, B, C].filter((x) => x.id !== s.id).map((x) => ({ ...x, active: false })), { ...s, active: true }]; };
+  let held = null, clock = keep.now();
+  const scans = [], settle = () => new Promise((r) => setTimeout(r, 30));
+  globalThis.__fakeExec = (c, a) => {
+    if (c !== "sh" || a[2] !== "sh" || !["scan", "status"].includes(a[3])) return { code: 1, stdout: "", stderr: "smoke: fake" };
+    if (a[3] === "status") return { code: 0, stdout: "" };
+    const id = spaces().find((s) => s.active)?.id; scans.push(id);
+    const out = { code: 0, stdout: (repos[id] ?? []).map((p) => `R\t${p}\tmain\t1\t0`).join("\n") + "\n" };
+    return held ? new Promise((r) => held.push(() => r(out))) : out;
+  };
+  const fresh = () => { const timers = [], w = new View(), timedCx = { ...cx, timer: { every: (ms, f) => timers.push([ms, f]), after() {} } }; w.init({}, timedCx);
+    w.tick = (ms) => { for (const [m, f] of timers) if (m === ms) f(timedCx); }; return w; };
+  const paths = (w) => w.places.map((p) => p.path).sort().join(","), want = (id) => [...repos[id]].sort().join(",");
+  const release = () => { const h = held ?? []; held = null; for (const f of h) f(); };
+  // A scanned, then B scanned: a view that has kept both.
+  const both = async () => { show(A); const w = fresh(); await settle(); show(B); w.findPlaces(cx); await settle(); return w; };
+  const parts = {
+    // C-cache-switch-back (AC6.1): A, then B, then A: A's list is there at once, before any scan settles.
+    "AC6.1": async () => {
+      const w = await both();
+      if (w.placesFor !== B.id) return `setup: B's scan did not commit (placesFor ${w.placesFor})`;
+      held = []; show(A); w.render(cx);
+      if (w.placesFor !== S || paths(w) !== want(S)) return `back on A, expected A's kept list at once, got placesFor ${w.placesFor} places ${paths(w)}`;
+      if (w.stale !== true) return `a kept list must still be rescanned (stale), got stale ${w.stale}`;
+      const n = (globalThis.__execs ?? []).length; w.render(cx); w.render(cx);
+      if ((globalThis.__execs ?? []).length !== n) return `a render with a kept list started ${(globalThis.__execs ?? []).length - n} exec(s)`;
+      return null;
+    },
+    // C-cache-updates: a rescan replaces the kept list (a repository appears, then one goes).
+    "updates": async () => {
+      const w = await both(), was = repos[S];
+      try {
+        show(A); w.findPlaces(cx); await settle();
+        repos[S] = [...repos[S], `${top}/src/A3`]; w.findPlaces(cx); await settle();
+        repos[S] = repos[S].filter((p) => !p.endsWith("/A2")); w.findPlaces(cx); await settle();
+        show(B); w.findPlaces(cx); await settle(); held = []; show(A); w.render(cx);
+        return w.placesFor === S && paths(w) === want(S) ? null : `the kept list did not follow the rescans: expected ${want(S)}, got placesFor ${w.placesFor} places ${paths(w)}`;
+      } finally { repos[S] = was; }
+    },
+    // C-no-cross-space (AC6.3): A's scan finishing while B is shown leaves B's list, and asks for another scan.
+    "AC6.3": async () => {
+      const w = await both(); show(A); w.findPlaces(cx); await settle();
+      held = []; w.findPlaces(cx); show(B); w.render(cx); w.stale = false; release(); await settle();
+      if (w.placesFor !== B.id || paths(w) !== want(B.id)) return `a scan of A finishing on B: expected B's kept list, got placesFor ${w.placesFor} places ${paths(w)}`;
+      if (w.stale !== true) return `the discarded scan of A must ask for another, got stale ${w.stale}`;
+      held = []; show(C); w.render(cx);
+      if (w.placesFor === C.id) return `a space never scanned shows a kept list (places ${paths(w)})`;
+      return null;
+    },
+    // At most 8 spaces kept, the least recently shown dropped.
+    "limit": async () => {
+      const nine = Array.from({ length: 9 }, (_, i) => sp(`m2/s${i}`, "m2"));
+      for (const s of nine) repos[s.id] = [`/home/u/${s.id}/a`, `/home/u/${s.id}/b`];
+      const w = fresh(); await settle();
+      for (const s of nine) { globalThis.__spaces = [s]; w.render(cx); w.findPlaces(cx); await settle(); }
+      held = []; globalThis.__spaces = [nine[1]]; w.render(cx);
+      if (w.placesFor !== nine[1].id || paths(w) !== want(nine[1].id)) return `the 8 most recent spaces must be kept: space 2 of 9 was not (placesFor ${w.placesFor})`;
+      globalThis.__spaces = [nine[0]]; w.render(cx);
+      return w.placesFor === nine[0].id ? "more than 8 spaces kept: space 1 of 9 still shown from the cache" : null;
+    },
+    // C-remote-interval (AC6.2): three 20 s ticks rescan a remote space once and a local one three times.
+    "AC6.2": async () => {
+      for (const [s, n] of [[B, 1], [A, 3]]) {
+        show(s); clock = keep.now(); const w = fresh(); await settle(); scans.length = 0;
+        for (let i = 0; i < 3; i++) { clock += 20000; w.tick(20000); await settle(); }
+        const got = scans.filter((x) => x === s.id).length;
+        if (got !== n) return `${s.machine ? "remote" : "local"} space: expected ${n} scan(s) in three 20 s ticks, got ${got}`;
+      }
+      return null;
+    },
+    // A switch, and the stale flag, still rescan a remote space at once, however young its list.
+    "AC6.2 forced": async () => {
+      show(B); clock = keep.now(); const w = fresh(); await settle(); show(A); w.render(cx); w.tick(2000); await settle();
+      scans.length = 0; show(B); w.render(cx); w.tick(2000); await settle();
+      if (scans.filter((x) => x === B.id).length !== 1) return `a switch back to a remote space must rescan it at once, got ${scans.length} scan(s)`;
+      scans.length = 0; w.stale = true; w.tick(2000); await settle();
+      return scans.length === 1 ? null : `the stale flag must rescan a remote space at once, got ${scans.length} scan(s)`;
+    },
+  };
+  const errs = [];
+  Date.now = () => clock;
+  try {
+    for (const [name, part] of Object.entries(parts)) {
+      let err; try { err = await part(); } catch (e) { err = `threw ${e?.stack ?? e}`; }
+      release(); await settle(); if (err) errs.push(`t-012 ${name} ${err}`);
+    }
+  } finally { release(); Date.now = keep.now; globalThis.__fakeExec = undefined; globalThis.__spaces = keep.spaces; }
+  return errs.length ? errs.join("\n  ") : null;
+};
+if (mod === "my-changes") { const ac32 = after[mod]; after[mod] = async (v) => (await ac32(v)) ?? changesCache(); }
 // t-010: a machine whose login sh has no ~/.local/bin on PATH (the remote desktop) still gets the
 // launcher when pa-session is installed there; a "not installed" answer is checked again later.
 // The real sh runs, with HOME a temp folder and a PATH without pa-session.

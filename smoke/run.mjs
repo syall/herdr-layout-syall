@@ -113,6 +113,40 @@ if (mod === "my-changes") {
     return v.places !== before || v.placesFor !== S ? "AC3.2 the scan for the old space was not discarded" : v.stale !== true ? `AC3.2 expected stale === true after a discarded scan, got ${v.stale}` : null;
   };
 }
+// t-010: a machine whose login sh has no ~/.local/bin on PATH (the remote desktop) still gets the
+// launcher when pa-session is installed there; a "not installed" answer is checked again later.
+// The real sh runs, with HOME a temp folder and a PATH without pa-session.
+const launcherCase = async (newSpaceRun) => {
+  const keep = { HOME: process.env.HOME, PATH: process.env.PATH }, now = Date.now, h = `${here}/.run/home-t010`, bin = `${h}/.local/bin/pa-session`;
+  const wait = () => new Promise((r) => setTimeout(r, 400)), same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  fs.rmSync(h, { recursive: true, force: true }); fs.mkdirSync(`${h}/.local/bin`, { recursive: true });
+  process.env.HOME = h; process.env.PATH = "/usr/bin:/bin";
+  try {
+    newSpaceRun("m1"); await wait();
+    const none = newSpaceRun("m1");
+    if (same(none, ["pa-session", "--ask"]) || same(none, [bin, "--ask"])) return `t-010 no pa-session installed, expected no launcher, got ${JSON.stringify(none)}`;
+    fs.writeFileSync(bin, "#!/bin/sh\n", { mode: 0o755 });
+    newSpaceRun("m2"); await wait();
+    const got = newSpaceRun("m2");
+    if (!same(got, [bin, "--ask"])) return `t-010 pa-session in ~/.local/bin but not on sh -l PATH: expected ${JSON.stringify([bin, "--ask"])}, got ${JSON.stringify(got)}`;
+    Date.now = () => now() + 61000; // a "not installed" answer a minute old is asked again
+    newSpaceRun("m1"); await wait();
+    const again = newSpaceRun("m1");
+    if (!same(again, [bin, "--ask"])) return `t-010 a "no launcher" answer was not checked again after a minute: got ${JSON.stringify(again)}`;
+    return null;
+  } finally { Date.now = now; process.env.HOME = keep.HOME; process.env.PATH = keep.PATH; }
+};
+if (mod === "my-spaces") after[mod] = async (v) => { v.launcher = {}; return launcherCase((m) => v.newSpaceRun(m, cx)); };
+// t-010 (my-new-menu): New space on a remote machine runs the launcher there too, not a plain shell.
+if (mod === "my-new-menu") after[mod] = async (v) => {
+  if (typeof v.newSpaceArgs !== "function") return "t-010 my-new-menu has no newSpaceArgs(space)";
+  globalThis.__shared["my-spaces.launcher"] = { m9: ["/x/pa-session", "--ask"] };
+  const remote = v.newSpaceArgs({ id: "m9/sp9", machine: "m9" }), local = v.newSpaceArgs({ id: S, machine: null }), unknown = v.newSpaceArgs({ id: "m8/sp8", machine: "m8" });
+  if (JSON.stringify(remote) !== JSON.stringify({ argv: ["/x/pa-session", "--ask"] })) return `t-010 remote New space expected the launcher, got ${JSON.stringify(remote)}`;
+  if (JSON.stringify(local) !== JSON.stringify({ argv: ["pa-session", "--ask"] })) return `t-010 local New space expected pa-session --ask, got ${JSON.stringify(local)}`;
+  if (JSON.stringify(unknown) !== "{}") return `t-010 remote New space with no launcher known expected {}, got ${JSON.stringify(unknown)}`;
+  return null;
+};
 if (mod === "my-toast") after[mod] = async () => (globalThis.__execs ?? []).length ? `I1 my-toast tried to start a process: ${globalThis.__execs.map((x) => x[0]).join(", ")}` : null;
 let n = 0, failed = 0;
 const fail = (msg) => { console.log(`FAIL ${mod} ${msg}`); failed += 1; process.exitCode = 1; };

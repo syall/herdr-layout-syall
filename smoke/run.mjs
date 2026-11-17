@@ -288,6 +288,8 @@ const changesCache = async () => {
             if (hidden.all) return `${s.machine ? "remote" : "local"}, ${how}: expected no exec in 3 min while hidden, got ${hidden.all} (${hidden.scan} scan(s), ${hidden.refresh} refresh(es))`;
             globalThis.__layout = panel("changes"); const m = (globalThis.__execs ?? []).length;
             if (wake === "render") w.render(cx); else w.tick(2000);
+            const now = count(m); // the execs start synchronously: "at once" means before anything settles
+            if (now.scan !== 1 || now.refresh !== 1) return `${s.machine ? "remote" : "local"}, ${how}, shown again by a ${wake}: expected 1 scan and 1 refresh started at once, got ${now.scan} scan(s), ${now.refresh} refresh(es)`;
             if (w.placesFor !== s.id || paths(w) !== want(s.id)) return `${how}: shown again, expected the kept list at once, got placesFor ${w.placesFor} places ${paths(w)}`;
             await settle(); w.tick(2000); await settle(); w.render(cx); await settle();
             const shown = count(m);

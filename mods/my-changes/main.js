@@ -16,6 +16,26 @@ function here() {
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
 
+// Whether this view is on screen: a block showing it in the shown layout with no hidden node
+// above it, and the selected child of each stack above it (how Herdr's tabs mod reads the side
+// panel). A copy the layout does not hold (a pane mod, a window) counts as shown. A hidden copy
+// stays alive and its timers keep running, so they do nothing while it is not on screen.
+function onScreen(name = "my-changes") {
+  let found = false, shown = false;
+  const walk = (n, ok) => {
+    if (!n || typeof n !== "object") return;
+    ok = ok && !n.hidden;
+    if (n.content?.mod === name) { found = true; shown ||= ok; }
+    const kids = Array.isArray(n.children) ? n.children : [], pick = n.type === "stack" ? n.active ?? kids[0]?.id : null;
+    for (const c of kids) walk(c, ok && (pick === null || c?.id === pick));
+  };
+  walk(layout(), true);
+  return shown || !found;
+}
+
+// How old a kept list is, in words.
+const age = (ms) => { const m = Math.floor(ms / 60000); return m < 1 ? "under a minute" : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h`; };
+
 function location() {
   const at = here(), pin = pinned[at.space];
   return pin ? { cwd: pin, on: spaces().find((s) => s.active)?.machine ?? null } : { cwd: at.cwd, on: at.on };
@@ -85,7 +105,9 @@ export default class Changes extends View {
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.places = []; // [{ path, branch, count, task }] repositories this space's work is in
-    this.placesBy = new Map(); // space id -> { places, real, at }: the last scan of each space, 8 at most, oldest shown dropped
+    // space id -> { places, real, at, tried, failed }: the last good scan of each space (at: when it started; null if
+    // none), the last try and whether it failed. 8 spaces at most, the least recently shown dropped.
+    this.placesBy = new Map();
     this.layout = ["list", "tasks"].includes(localStorage.getItem("places.layout")) ? localStorage.getItem("places.layout") : "tree";
     this.all = localStorage.getItem("places.all") === "1"; // show repositories without changes too
     this.foldedDirs = new Set(JSON.parse(localStorage.getItem("places.closed") ?? "[]")); // folded tree folders
@@ -93,7 +115,7 @@ export default class Changes extends View {
     this.findPlaces(cx);
     cx.timer.every(10000, (cx) => this.refresh(cx));
     cx.timer.every(20000, (cx) => this.findPlaces(cx, { tick: true }));
-    cx.timer.every(2000, (cx) => { if (this.stale) { this.stale = false; this.findPlaces(cx); } });
+    cx.timer.every(2000, (cx) => { this.wake(cx); if (this.stale && onScreen()) { this.stale = false; this.findPlaces(cx); } });
     this.scope = null; // "work": uncommitted changes; "branch": everything since the base branch; null: decided per repository
   }
 
@@ -118,16 +140,19 @@ export default class Changes extends View {
   // Every repository under the top folder, the focused folder and each worktree a Project Agent
   // recorded for this space (shared "project-agent.worktrees"), plus those repositories' own git
   // worktrees wherever they live.
-  // The 20 s timer passes tick: a space on another machine is then looked at again only once its
-  // list is a minute old (a scan there takes seconds). Anything else (a switch, the stale flag,
-  // Refresh) looks now.
+  // The 20 s timer passes tick: a space on another machine is then looked at again only a minute
+  // after its last scan started (a scan there takes seconds). Anything else (a switch, the stale
+  // flag, Refresh) looks now. A scan that fails keeps the last good list, noted in the picker.
+  // Not on screen: nothing; it looks when shown again (wake).
   findPlaces(cx, { tick = false } = {}) {
+    if (!onScreen()) { this.asleep = true; return; }
     const at = here(), top = this.top();
     this.restore(at.space);
     const space = spaces().find((s) => s.active), on = space?.machine ?? null;
-    if (tick && on && Date.now() - (this.placesBy.get(at.space)?.at ?? -Infinity) < 60000) return;
+    if (tick && on && Date.now() - (this.placesBy.get(at.space)?.tried ?? -Infinity) < 60000) return;
     if (!(top || at.cwd) || this.finding) return;
-    this.finding = true;
+    this.finding = true; this.stale = false; // this scan is the look that was asked for
+    const started = Date.now();
     const trees = (shared("project-agent.worktrees") ?? {})[at.space] ?? [];
     const inside = (p, dir) => p === dir || p.startsWith(`${dir}/`);
     // Roots: the top folder, then anything not already inside an earlier root.
@@ -143,18 +168,31 @@ export default class Changes extends View {
           else if (kind === "W" && path) extra.add(path);
         }
       };
+      // Failed: the scan exits non-zero (it exits 0 whenever it ran, repositories or not) or an exec throws (a
+      // timeout, the machine out of reach).
+      let failed = false;
       try {
-        read((await exec("sh", ["-c", SCAN, "sh", "scan", ...roots.slice(0, 12)], { on, timeout: 60000 })).stdout);
+        const r = await exec("sh", ["-c", SCAN, "sh", "scan", ...roots.slice(0, 12)], { on, timeout: 60000 });
+        failed = r.code !== 0;
+        read(r.stdout);
         const more = [...extra].filter((p) => !found.has(p)).slice(0, 40);
-        if (more.length) read((await exec("sh", ["-c", SCAN, "sh", "status", ...more], { on, timeout: 60000 })).stdout);
-      } catch {}
+        if (!failed && more.length) read((await exec("sh", ["-c", SCAN, "sh", "status", ...more], { on, timeout: 60000 })).stdout);
+      } catch { failed = true; }
       this.finding = false;
       if (spaces().find((s) => s.active)?.id !== at.space) { this.stale = true; return; } // the space changed: look again
+      const kept = this.placesBy.get(at.space);
+      if (failed && kept?.at != null) { // keep the last good list, and say so
+        kept.tried = started; kept.failed = true;
+        this.places = kept.places; this.real = kept.real; this.placesFor = at.space;
+        this.placesBy.delete(at.space); this.placesBy.set(at.space, kept);
+        cx.notify();
+        return;
+      }
       this.real = real;
       for (const p of found.values()) p.task = trees.find((w) => inside(p.path, w.path) || inside(p.path, real[w.path] ?? w.path))?.task ?? null;
       this.places = [...found.values()].sort((x, y) => this.rel(x.path).localeCompare(this.rel(y.path)));
       this.placesFor = at.space;
-      this.placesBy.delete(at.space); this.placesBy.set(at.space, { places: this.places, real, at: Date.now() });
+      this.placesBy.delete(at.space); this.placesBy.set(at.space, { places: this.places, real, at: failed ? null : started, tried: started, failed });
       while (this.placesBy.size > 8) this.placesBy.delete(this.placesBy.keys().next().value);
       cx.notify();
     });
@@ -167,6 +205,22 @@ export default class Changes extends View {
     if (!kept?.places.length || this.placesFor === id) return;
     this.places = kept.places; this.real = kept.real; this.placesFor = id; this.stale = true;
     this.placesBy.delete(id); this.placesBy.set(id, kept); // now the most recently shown
+  }
+
+  // Shown again after a time off screen: what was kept is there already; refresh and look now.
+  wake(cx) {
+    if (!this.asleep || !onScreen()) return;
+    this.asleep = false;
+    this.restore(here().space);
+    this.refresh(cx);
+    this.findPlaces(cx);
+  }
+
+  // The note for a space whose last scan failed: the list shown is older than it looks.
+  placesNote(id) {
+    const kept = this.placesBy.get(id);
+    if (!kept?.failed) return null;
+    return kept.at == null ? "Could not refresh" : `Could not refresh · list ${age(Date.now() - kept.at)} old`;
   }
 
   pin(path, cx) {
@@ -321,6 +375,7 @@ export default class Changes extends View {
       .child(h_flex().h(28).px(10).gap(6).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(`${top.split("/").pop() || "/"} · ${mine.length} repositories, ${changed} with work in them`))
         .child(toggle("places-refresh", this.finding ? "Looking…" : "↻ Refresh", false, (_e, cx) => { this.findPlaces(cx); this.refresh(cx); cx.notify(); }))
+        .when(Boolean(this.placesNote(at.space)), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.blocked).tooltip("The last scan failed; this is the last list found").child(this.placesNote(at.space))))
         // Agents working at the top folder itself, or somewhere no row shows.
         .children(jump(agents.filter((w) => !shown.some((p) => within(w.cwd, p.path)) && (this.layout === "list" || !within(w.cwd, this.real?.[top] ?? top) || w.cwd === (this.real?.[top] ?? top))), "top"))
         .child(toggle("places-here", "Follow focus", !pin, (_e, cx) => this.pin(null, cx)))
@@ -349,6 +404,7 @@ export default class Changes extends View {
   }
 
   refresh(cx) {
+    if (!onScreen()) { this.asleep = true; return; } // not on screen: refresh when shown again (wake)
     if (this.loading || this.busy) return;
     const { cwd, on } = location(), context = key();
     if (context !== this.context) {
@@ -497,6 +553,7 @@ export default class Changes extends View {
   }
 
   render(cx) {
+    this.wake(cx);
     if (key() !== this.context) this.refresh(cx);
     this.restore(here().space);
     const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);

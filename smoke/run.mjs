@@ -3,7 +3,12 @@ import fs from "fs"; import path from "path";
 const here = path.dirname(new URL(import.meta.url).pathname);
 const mod = process.argv[2], src = `${process.env.HERDR_APP_HOME ?? process.env.HOME + "/.config/herdr-app"}/mods/${mod}`, dst = `${here}/.run/${mod}`;
 fs.rmSync(dst, { recursive: true, force: true }); fs.mkdirSync(dst, { recursive: true });
-for (const f of fs.readdirSync(src)) if (f.endsWith(".js") && !f.includes(".bak-")) fs.writeFileSync(path.join(dst, f), fs.readFileSync(path.join(src, f), "utf8").replace(/from "(gpui-kit|gpui-base|herdr)"/g, 'from "../../stubs.mjs"'));
+// t-194 hostile case 1: SMOKE_NO_CHECKING=1 loads the mod against stubs without the `checking` export (a Herdr
+// older than 0.1.16): the mod must still load, and behave as in a live window.
+// (The stubs are first imported below, after the fake data is set: stubs.mjs keeps globalThis.__shared.)
+const noChecking = process.env.SMOKE_NO_CHECKING === "1";
+const stubPath = noChecking ? "../stubs-no-checking.mjs" : "../../stubs.mjs";
+for (const f of fs.readdirSync(src)) if (f.endsWith(".js") && !f.includes(".bak-")) fs.writeFileSync(path.join(dst, f), fs.readFileSync(path.join(src, f), "utf8").replace(/from "(gpui-kit|gpui-base|herdr)"/g, `from "${stubPath}"`));
 const S = "sp1", top = `${here}/.run/top`;
 fs.mkdirSync(`${top}/src/A`, { recursive: true });
 globalThis.__spaces = [{ id: S, name: "proj", active: true, machine: null, folder: top, tabs: [{ id: "tb1", index: 1, name: "PA: proj", named: true, active: true, status: "working" }, { id: "tb2", index: 2, name: "2", active: false }] }];
@@ -20,9 +25,15 @@ if (mod === "my-toast") globalThis.__props = { title: "Claude Code finished", bo
 if (mod === "my-toast") globalThis.__noSpawn = true;
 if (mod === "project-agent" && process.argv[3] === "delete-worker") globalThis.__props = { deleteWorker: { space: S, machine: null, address: "t2", name: "t-001-build" } };
 const { cx } = await import("./stubs.mjs");
+if (noChecking) {
+  const names = Object.keys(await import("./stubs.mjs")).filter((k) => k !== "checking");
+  fs.writeFileSync(`${here}/.run/stubs-no-checking.mjs`, `export { ${names.join(", ")} } from "../stubs.mjs";\n`);
+}
 const View = (await import(`./.run/${mod}/main.js`)).default, v = new View();
 v.init?.(globalThis.__props ?? {}, cx);
 await new Promise((r) => setTimeout(r, 400));
+// t-194 hostile case 7: in a live window (checking() false) init asks knownAgents() as often as at 7821ea0.
+const LIVE_KNOWN_AGENTS = { "my-tabs": 1, "my-spaces": 1, "my-new-menu": 1 }, liveKnownAgents = globalThis.__knownAgentsCalls ?? 0;
 const states = {
   "my-changes": [(v) => { v.places = [{ path: `${top}/src/A`, branch: "main", count: 2, task: null }, { path: `${top}/worktrees/a/src/Pkg`, branch: "t-001", count: 1, task: "t-001" }, { path: "/elsewhere/wt", branch: "x", count: 0, task: null }]; v.placesFor = S; v.real = {}; },
     (v) => { v.layout = "list"; }, (v) => { v.layout = "tasks"; }, (v) => { v.places[1].ahead = 3; v.places[1].count = 0; v.base = { ref: "main", sha: "abc", commits: 3 }; v.branchScope = true; v.dirty = 0; }, (v) => { v.all = true; v.layout = "tree"; v.foldedDirs.add("/worktrees/a/src"); }, (v) => { v.pin(`${top}/src/A`, cx); }, (v) => { v.root = `${top}/src/A`; v.files = [{ path: "a/b.txt", status: "M", add: 1, del: 2 }]; },
@@ -489,4 +500,44 @@ if (after[mod]) { const err = await after[mod](v); if (err) fail(`after: ${err}`
   for (const c of ["terminal-notifier", "osascript", "herdr-app", "herdr", "hc"]) for (const p of [c, `/nonexistent/bin/${c}`]) {
     const r = await exec(p, []); if (r.stderr !== "smoke: not spawned") fail(`I1 stub exec did not refuse ${p}`); }
   globalThis.__noSpawn = keep; }
+if (liveKnownAgents !== (LIVE_KNOWN_AGENTS[mod] ?? 0)) fail(`t-194 live: init called knownAgents() ${liveKnownAgents} time(s), ${LIVE_KNOWN_AGENTS[mod] ?? 0} expected (R3)`);
+// t-194: `herdr-app check` runs init() and one render for real, then exits without waiting for or ending what
+// they started: every process (knownAgents()'s login-shell probe, exec(), hc()) is left running with ppid 1.
+// While checking() is true a mod starts none, from init or anything it starts (spawns, promises, timers) or
+// from render. Each pass: fresh views, a cx whose timers fire once, one render, 400 ms; every call is counted.
+const checkingPass = async (label, { views = 1, machine = null, checkingFn, live = noChecking } = {}) => {
+  await new Promise((r) => setTimeout(r, 300));
+  const keep = { spaces: globalThis.__spaces, shared: JSON.stringify(globalThis.__shared), noSpawn: globalThis.__noSpawn };
+  Object.assign(globalThis, { __knownAgentsCalls: 0, __knownAgentsArgs: [], __execs: [], __hcs: [], __noSpawn: true, __checking: true });
+  if (checkingFn) globalThis.__checkingFn = checkingFn;
+  globalThis.__spaces = keep.spaces.map((x) => ({ ...x, machine }));
+  const errors = []; let on = true;
+  const later = (f) => { setTimeout(() => { if (on) try { f(checkCx); } catch (e) { errors.push(`timer: ${e?.message ?? e}`); } }, 50); };
+  const checkCx = { ...cx, spawn(f) { const p = f(checkCx); if (p?.catch) p.catch((e) => errors.push(`spawn: ${e?.message ?? e}`)); return p; }, timer: { every: (_ms, f) => later(f), after: (_ms, f) => later(f) } };
+  try {
+    const { default: Mod } = await import(`./.run/${mod}/main.js`), vs = Array.from({ length: views }, () => new Mod());
+    for (const x of vs) { try { x.init?.(globalThis.__props ?? {}, checkCx); } catch (e) { errors.push(`init: ${e?.message ?? e}`); } }
+    for (const x of vs) { try { x.render(checkCx); } catch (e) { errors.push(`render: ${e?.message ?? e}`); } }
+    await new Promise((r) => setTimeout(r, 400));
+  } finally {
+    on = false;
+    delete globalThis.__checking; delete globalThis.__checkingFn;
+    globalThis.__spaces = keep.spaces; globalThis.__noSpawn = keep.noSpawn;
+    for (const k of Object.keys(globalThis.__shared)) delete globalThis.__shared[k];
+    Object.assign(globalThis.__shared, JSON.parse(keep.shared));
+  }
+  const ka = globalThis.__knownAgentsCalls, execs = globalThis.__execs, hcs = globalThis.__hcs, want = live ? views * (LIVE_KNOWN_AGENTS[mod] ?? 0) : 0;
+  const bad = [...errors];
+  if (ka !== want) bad.push(`knownAgents() called ${ka} time(s) (${JSON.stringify(globalThis.__knownAgentsArgs)}), ${want} expected`);
+  if (!live && execs.length) bad.push(`exec() called ${execs.length} time(s): ${[...new Set(execs.map((x) => x.slice(0, 2).join(" ")))].join(", ")}`);
+  if (!live && hcs.length) bad.push(`hc() called ${hcs.length} time(s): ${[...new Set(hcs.map((x) => x.slice(0, 2).join(" ")))].join(", ")}`);
+  for (const b of bad) fail(`t-194 checking (${label}): ${b}`);
+};
+await checkingPass("local, two instances", { views: 2 }); // hostile cases 4 and 6
+await checkingPass("remote space m1", { machine: "m1" }); // hostile case 5
+if (!noChecking) {
+  // Hostile cases 2 and 3: only checking() === true counts; anything else, or a throw, is a live window.
+  for (const [label, f] of [["checking() returns 1", () => 1], ['checking() returns "yes"', () => "yes"], ["checking() returns undefined", () => undefined], ["checking() throws", () => { throw new Error("no"); }]])
+    await checkingPass(label, { checkingFn: f, live: true });
+}
 console.log(`${mod}: rendered ${n} state(s) ${failed ? `with ${failed} failure(s)` : "without an error"}`);

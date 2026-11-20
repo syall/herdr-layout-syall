@@ -47,13 +47,18 @@ pass=0; fail=0
 # Mod names are split on whitespace: a folder name with a space runs as two names that do not
 # exist, so it fails (FAIL, exit 1) rather than passing unseen. Globbing is off for the list.
 set -f
+# Each mod runs twice: against the stubs, and against stubs without Herdr 0.1.16's `checking` export
+# (SMOKE_NO_CHECKING=1, an older Herdr: the mod must load and behave as in a live window; t-194).
 for m in $mods; do
-  out=$(cd "$T/smoke" && HERDR_APP_HOME="$T/home" "$node" run.mjs "$m" 2>&1); code=$?
-  if [ $code -eq 0 ] && printf '%s\n' "$out" | grep -qx -e "$m: rendered [0-9][0-9]* state(s) without an error"; then
-    pass=$((pass + 1)); echo "ok   $m"
-  else
-    fail=$((fail + 1)); echo "FAIL $m (exit $code)"; printf '%s\n' "$out" | tail -20
-  fi
+  for stubs in with no; do
+    if [ $stubs = no ]; then name="$m (no checking export)"; else name=$m; fi
+    out=$(cd "$T/smoke" && if [ $stubs = no ]; then SMOKE_NO_CHECKING=1; export SMOKE_NO_CHECKING; fi && HERDR_APP_HOME="$T/home" "$node" run.mjs "$m" 2>&1); code=$?
+    if [ $code -eq 0 ] && printf '%s\n' "$out" | grep -qx -e "$m: rendered [0-9][0-9]* state(s) without an error"; then
+      pass=$((pass + 1)); echo "ok   $name"
+    else
+      fail=$((fail + 1)); echo "FAIL $name (exit $code)"; printf '%s\n' "$out" | tail -20
+    fi
+  done
 done
 echo "run-all: $pass passed, $fail failed"
 [ $fail -eq 0 ] && [ $pass -gt 0 ]

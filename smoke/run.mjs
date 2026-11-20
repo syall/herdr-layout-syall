@@ -438,6 +438,42 @@ if (mod === "my-new-menu") after[mod] = async (v) => {
   } finally { v.row = row; globalThis.__spaces = keep; }
   return null;
 };
+// t-167 (my-files): the Files view with the Project Agent section open, 31 task shortcuts, 5 workers per
+// task in "project-agent.workers" (3 live, 1 exited, 1 with no terminal) and 200 terminals. One render
+// asks the host for terminals() at most 2 times (each call is a host call; per worker calls ran past
+// Herdr's render budget: "interrupted"), and each shortcut still shows the chips of its live workers only.
+const filesManyWorkers = (v) => {
+  const keep = { terminals: globalThis.__terminals, shared: { ...globalThis.__shared }, filterText: v.filterText, folded: v.placesFolded };
+  const crew = {}, terms = [], places = [{ label: "All evidence", path: "/e", group: "Project Agent" }], want = [];
+  for (let i = 0; i < 31; i += 1) {
+    const task = `t-${100 + i}`;
+    places.push({ label: `${task} evidence · 3 files`, detail: "x", path: `/e/${task}`, group: "Project Agent", task });
+    crew[`w${i}-gone`] = { task, role: "check" };
+    crew[`w${i}-exited`] = { task, role: "design" }; terms.push({ address: `w${i}-exited`, state: "exited", status: "idle", labels: {} });
+    for (const role of ["build", "verifier", "reviewer"]) {
+      const address = `w${i}-${role}`;
+      crew[address] = { task, role }; terms.push({ address, state: "live", status: "working", labels: {} }); want.push(`Show the ${role} (${address})`);
+    }
+  }
+  while (terms.length < 200) terms.push({ address: `x${terms.length}`, state: "live", status: "idle", labels: {} });
+  globalThis.__terminals = [...keep.terminals, ...terms];
+  Object.assign(globalThis.__shared, { "project-agent.workers": { [S]: crew }, "my-files.places": { [S]: places }, "my-files.root": null });
+  v.filterText = ""; v.placesFolded = new Set();
+  try {
+    // A first render moves the view off the pinned folder (it may reopen the file it showed there); then the tree.
+    v.render(cx); v.show(null);
+    globalThis.__tooltips = []; globalThis.__terminalsCalls = 0;
+    v.render(cx);
+    const calls = globalThis.__terminalsCalls, chips = globalThis.__tooltips.filter((x) => String(x).startsWith("Show the "));
+    if (calls > 2) return `t-167 one render with 31 task shortcuts and 155 workers called terminals() ${calls} times (at most 2 wanted)`;
+    if (JSON.stringify(chips) !== JSON.stringify(want)) return `t-167 worker chips wrong: expected ${want.length} live-worker chips ${JSON.stringify(want.slice(0, 3))}..., got ${chips.length} ${JSON.stringify(chips.slice(0, 3))}...`;
+    return null;
+  } finally {
+    globalThis.__terminals = keep.terminals; globalThis.__shared = Object.assign(globalThis.__shared, keep.shared);
+    v.filterText = keep.filterText; v.placesFolded = keep.folded; delete globalThis.__tooltips; delete globalThis.__terminalsCalls;
+  }
+};
+if (mod === "my-files") after[mod] = async (v) => filesManyWorkers(v);
 if (mod === "my-toast") after[mod] = async () => (globalThis.__execs ?? []).length ? `I1 my-toast tried to start a process: ${globalThis.__execs.map((x) => x[0]).join(", ")}` : null;
 let n = 0, failed = 0;
 const fail = (msg) => { console.log(`FAIL ${mod} ${msg}`); failed += 1; process.exitCode = 1; };

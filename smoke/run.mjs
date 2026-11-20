@@ -505,9 +505,11 @@ if (liveKnownAgents !== (LIVE_KNOWN_AGENTS[mod] ?? 0)) fail(`t-194 live: init ca
 // they started: every process (knownAgents()'s login-shell probe, exec(), hc()) is left running with ppid 1.
 // While checking() is true a mod starts none, from init or anything it starts (spawns, promises, timers) or
 // from render. Each pass: fresh views, a cx whose timers fire once, one render, 400 ms; every call is counted.
-const checkingPass = async (label, { views = 1, machine = null, checkingFn, live = noChecking } = {}) => {
+const checkingPass = async (label, { views = 1, machine = null, checkingFn, live = noChecking, props, win } = {}) => {
   await new Promise((r) => setTimeout(r, 300));
-  const keep = { spaces: globalThis.__spaces, shared: JSON.stringify(globalThis.__shared), noSpawn: globalThis.__noSpawn };
+  const keep = { spaces: globalThis.__spaces, shared: JSON.stringify(globalThis.__shared), noSpawn: globalThis.__noSpawn, props: globalThis.__props, win: globalThis.__window };
+  if (props) globalThis.__props = props;
+  if (win) globalThis.__window = win;
   Object.assign(globalThis, { __knownAgentsCalls: 0, __knownAgentsArgs: [], __execs: [], __hcs: [], __noSpawn: true, __checking: true });
   if (checkingFn) globalThis.__checkingFn = checkingFn;
   globalThis.__spaces = keep.spaces.map((x) => ({ ...x, machine }));
@@ -522,7 +524,7 @@ const checkingPass = async (label, { views = 1, machine = null, checkingFn, live
   } finally {
     on = false;
     delete globalThis.__checking; delete globalThis.__checkingFn;
-    globalThis.__spaces = keep.spaces; globalThis.__noSpawn = keep.noSpawn;
+    globalThis.__spaces = keep.spaces; globalThis.__noSpawn = keep.noSpawn; globalThis.__props = keep.props; globalThis.__window = keep.win;
     for (const k of Object.keys(globalThis.__shared)) delete globalThis.__shared[k];
     Object.assign(globalThis.__shared, JSON.parse(keep.shared));
   }
@@ -535,6 +537,10 @@ const checkingPass = async (label, { views = 1, machine = null, checkingFn, live
 };
 await checkingPass("local, two instances", { views: 2 }); // hostile cases 4 and 6
 await checkingPass("remote space m1", { machine: "m1" }); // hostile case 5
+// Mods whose init starts a process only with some props or window: the space menu of a space (a git
+// look), a toast while Herdr is behind another app (a macOS notification).
+if (mod === "my-menu") await checkingPass("space menu", { props: { tab: "space", target: { id: S } } });
+if (mod === "my-toast") await checkingPass("Herdr not in front", { win: { platform: "macos", active: false } });
 if (!noChecking) {
   // Hostile cases 2 and 3: only checking() === true counts; anything else, or a throw, is a live window.
   for (const [label, f] of [["checking() returns 1", () => 1], ['checking() returns "yes"', () => "yes"], ["checking() returns undefined", () => undefined], ["checking() throws", () => { throw new Error("no"); }]])

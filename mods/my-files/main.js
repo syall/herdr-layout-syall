@@ -12,10 +12,23 @@ function openTask(space, task) {
   setShared("project-agent.show", { space, task, at: Date.now() });
   run("layout.select", { stack: "panel-body", child: "project-agent" });
 }
-function liveWorkers(space, task) {
-  const crew = (shared("project-agent.workers") ?? {})[space] ?? {};
-  return Object.entries(crew).filter(([address, w]) => w.task === task && terminals().some((x) => x.address === address && x.state === "live"))
-    .map(([address, w]) => ({ address, role: w.role ?? "worker", status: terminals().find((x) => x.address === address)?.status }));
+// The space's live workers by task, read once per render: one shared() and one terminals() call,
+// however many shortcuts show chips (t-167: a call per worker per shortcut ran past the render budget).
+function liveWorkersByTask(space) {
+  const crew = (shared("project-agent.workers") ?? {})[space] ?? {}, byTask = new Map();
+  const entries = Object.entries(crew);
+  if (!entries.length) return byTask;
+  const first = new Map(), live = new Set();
+  for (const x of terminals() ?? []) {
+    if (!first.has(x.address)) first.set(x.address, x);
+    if (x.state === "live") live.add(x.address);
+  }
+  for (const [address, w] of entries) {
+    if (!live.has(address)) continue;
+    if (!byTask.has(w.task)) byTask.set(w.task, []);
+    byTask.get(w.task).push({ address, role: w.role ?? "worker", status: first.get(address)?.status });
+  }
+  return byTask;
 }
 function showAgent(address) {
   const find = (n, id) => { if (n?.id === id) return n; for (const c of n?.children ?? []) { const f = find(c, id); if (f) return f; } return null; };
@@ -268,11 +281,13 @@ export default class Files extends View {
     // Project Agent's evidence folders. Shown above the tree; a click pins the view to that folder.
     const spaceId = location().space, spots = (shared("my-files.places") ?? {})[spaceId] ?? [];
     // The task and live agents of a folder, as small buttons.
+    let crew = null;
+    const liveWorkers = (task) => (crew ??= liveWorkersByTask(spaceId)).get(task) ?? [];
     const links = (task, key) => !task ? [] : [
       div().id(`ftask-${key}`).flex_none().px(5).h(18).flex().items_center().rounded(5).bg(t.raised).text_size(10.5).text_color(t.muted).cursor_pointer()
         .hover(s => s.text_color(t.foreground)).tooltip(`Open task ${task} in the Project panel`)
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => { cx.stop_propagation(); openTask(spaceId, task); }).child(`${task} →`),
-      ...liveWorkers(spaceId, task).slice(0, 3).map((w, i) => h_flex().id(`fagent-${key}-${i}`).flex_none().h(18).px(5).gap(4).items_center().rounded(5).border_1().border_color(t.border)
+      ...liveWorkers(task).slice(0, 3).map((w, i) => h_flex().id(`fagent-${key}-${i}`).flex_none().h(18).px(5).gap(4).items_center().rounded(5).border_1().border_color(t.border)
         .text_size(10.5).text_color(t.muted).cursor_pointer().hover(s => s.bg(t.raised).text_color(t.foreground)).tooltip(`Show the ${w.role} (${w.address})`)
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => { cx.stop_propagation(); showAgent(w.address); })
         .child(div().size(6).rounded(3).bg(t[w.status] ?? t.idle)).child(`${w.role} ↗`)),

@@ -8,6 +8,11 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec, shared } from "herdr";
+import * as herdr from "herdr";
+// t-194: `herdr-app check` runs init() and a render for real, then exits and leaves every process they
+// started (knownAgents()'s login-shell probe, exec(), hc()) running. checking() (Herdr 0.1.16) is true then;
+// an older Herdr has no such export, so it is read through the namespace: missing, not true or throwing is live.
+const isChecking = () => { try { return herdr.checking?.() === true; } catch { return false; } };
 
 // The space's home folder (shared "space.home", set from the space menu): where its new terminals start.
 const homeOf = (id) => (shared("space.home") ?? {})[id] || undefined;
@@ -117,7 +122,7 @@ export default class Menu extends View {
     const p = props();
     const space = p?.tab === "space" && spaces().find((s) => s.id === p.target?.id);
     const folder = space && place(space);
-    if (folder)
+    if (folder && !isChecking())
       cx.spawn(async (cx) => {
         this.git = await checkout(folder, space.machine).catch(() => null);
         cx.notify();

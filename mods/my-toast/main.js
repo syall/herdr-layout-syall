@@ -7,6 +7,11 @@
 import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { props, closeOverlay, run, theme, window, agents, spaces, shared, setShared, exec, hc } from "herdr";
+import * as herdr from "herdr";
+// t-194: `herdr-app check` runs init() and a render for real, then exits and leaves every process they
+// started (knownAgents()'s login-shell probe, exec(), hc()) running. checking() (Herdr 0.1.16) is true then;
+// an older Herdr has no such export, so it is read through the namespace: missing, not true or throwing is live.
+const isChecking = () => { try { return herdr.checking?.() === true; } catch { return false; } };
 
 // What the notification is about, from the command it runs when clicked: the space, and the
 // agent or task. Herdr's own toasts go to an agent (`terminal`); others may name a space (`id`).
@@ -86,6 +91,7 @@ export default class Toast extends View {
   init(_props, cx) {
     // With Herdr in front the toast is enough; behind another app, say it through macOS too.
     const p = props() ?? {};
+    if (isChecking()) return;
     if (window()?.platform === "macos" && !window().active && (p.title || p.body)) cx.spawn(async () => { try { await system(p); } catch {} });
     // The in-app toast gets the same detail under its title.
     cx.spawn(async (cx) => { try { this.more = await specifics(p); cx.notify(); } catch {} });

@@ -37,8 +37,10 @@ The mods are clones of Herdr 0.1.15's shipped mods and do not get its updates.
 ## Smoke test
 
 `herdr-app check` renders a mod once with no data, so it misses errors in code that only runs with
-real data. `smoke/run.mjs` runs an installed mod's render code under Node with a stubbed UI kit and
-fake spaces, agents, tasks and repositories:
+real data. It also runs `init()` for real and leaves any process init starts running (a `knownAgents()`
+login-shell probe, `exec()`, `hc()`), so init starts none while `checking()` is true (each mod reads it as
+`herdr.checking?.()`: Herdr before 0.1.16 has no such export).
+`smoke/run.mjs` runs an installed mod's render code under Node with a stubbed UI kit and fake spaces, agents, tasks and repositories:
 
 ```sh
 cd smoke && for m in my-changes my-agent-picker my-files project-agent my-tabs my-menu my-pane my-spaces my-new-menu space-home; do node run.mjs $m; done

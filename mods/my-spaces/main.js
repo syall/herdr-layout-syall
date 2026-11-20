@@ -8,6 +8,11 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, knownAgents } from "herdr";
+import * as herdr from "herdr";
+// t-194: `herdr-app check` runs init() and a render for real, then exits and leaves every process they
+// started (knownAgents()'s login-shell probe, exec(), hc()) running. checking() (Herdr 0.1.16) is true then;
+// an older Herdr has no such export, so it is read through the namespace: missing, not true or throwing is live.
+const isChecking = () => { try { return herdr.checking?.() === true; } catch { return false; } };
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -68,7 +73,7 @@ export default class Spaces extends View {
     // to set up a Project Agent now, or which session to open instead. Elsewhere: Herdr's Claude entry.
     this.claudeRun = ["claude"];
     this.launcher = {}; // machine ("" here) -> "asking" (first check) | { run: argv | null, at, asking }
-    knownAgents().then((list) => { const c = list.find((a) => a.key === "claude"); if (c?.run?.length) this.claudeRun = c.run; }).catch(() => {});
+    if (!isChecking()) knownAgents().then((list) => { const c = list.find((a) => a.key === "claude"); if (c?.run?.length) this.claudeRun = c.run; }).catch(() => {});
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -87,6 +92,7 @@ export default class Spaces extends View {
     this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
     for (const state of Object.values(this.reconnecting)) state.busy = false;
     this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
+    if (isChecking()) return;
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).

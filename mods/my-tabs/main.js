@@ -3,6 +3,11 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, knownAgents, terminals, machines, focused, nextCommand, notify, readTextFile, home } from "herdr";
+import * as herdr from "herdr";
+// t-194: `herdr-app check` runs init() and a render for real, then exits and leaves every process they
+// started (knownAgents()'s login-shell probe, exec(), hc()) running. checking() (Herdr 0.1.16) is true then;
+// an older Herdr has no such export, so it is read through the namespace: missing, not true or throwing is live.
+const isChecking = () => { try { return herdr.checking?.() === true; } catch { return false; } };
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -29,6 +34,7 @@ export default class Tabs extends View {
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
     // A space's replacement last tab starts Herdr's Claude entry (programs.json "claude" run, set by the profile).
     this.claudeRun = ["claude"];
+    if (isChecking()) return;
     knownAgents().then((list) => { const c = list.find((a) => a.key === "claude"); if (c?.run?.length) this.claudeRun = c.run; }).catch(() => {});
     cx.spawn(async (cx) => {
       for (;;) {

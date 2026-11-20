@@ -4,6 +4,11 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView, InputState, Input } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, shared, setShared, terminals, layout, run } from "herdr";
+import * as herdr from "herdr";
+// t-194: `herdr-app check` runs init() and a render for real, then exits and leaves every process they
+// started (knownAgents()'s login-shell probe, exec(), hc()) running. checking() (Herdr 0.1.16) is true then;
+// an older Herdr has no such export, so it is read through the namespace: missing, not true or throwing is live.
+const isChecking = () => { try { return herdr.checking?.() === true; } catch { return false; } };
 
 // my-files: a folder that belongs to a Project Agent task links back to it. The task opens in
 // the Project panel (shared "project-agent.show"); its live workers (shared
@@ -56,6 +61,7 @@ const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", 
 const PER_FOLDER = 500, TOTAL = 5000;
 
 async function directory(path, on) {
+  if (isChecking()) return [];
   const windowsDirectory = async () => {
     // Windows PowerShell otherwise uses the console code page; exec decodes UTF-8.
     // Links keep directory attributes even when dangling; check their target.
@@ -130,7 +136,7 @@ export default class Files extends View {
       if (pin && cwd && pin.path === cwd && pin.at && pin.at !== this.pinAt) { this.pinAt = pin.at; this.openPinned(pin.file, cx); }
       else if (saved?.file) this.show(saved.file, cx);
     }
-    if (!cwd || this.loading) return;
+    if (!cwd || this.loading || isChecking()) return;
     const context = this.context;
     this.loading = true;
     this.limited = false;
@@ -204,7 +210,7 @@ export default class Files extends View {
   // tracks plus untracked files it does not ignore, else a plain search that skips dot-folders.
   listAll(cx) {
     const context = this.context, root = this.root, on = this.on;
-    if (!context || !root || this.listing || (this.allFilesFor === context.key && Date.now() - (this.allFilesAt ?? 0) < 60000)) return;
+    if (!context || !root || this.listing || isChecking() || (this.allFilesFor === context.key && Date.now() - (this.allFilesAt ?? 0) < 60000)) return;
     this.listing = true;
     cx.spawn(async (cx) => {
       let files = [];

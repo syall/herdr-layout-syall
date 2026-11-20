@@ -3,6 +3,11 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared, setShared, terminals, layout, run } from "herdr";
+import * as herdr from "herdr";
+// t-194: `herdr-app check` runs init() and a render for real, then exits and leaves every process they
+// started (knownAgents()'s login-shell probe, exec(), hc()) running. checking() (Herdr 0.1.16) is true then;
+// an older Herdr has no such export, so it is read through the namespace: missing, not true or throwing is live.
+const isChecking = () => { try { return herdr.checking?.() === true; } catch { return false; } };
 
 // my-changes: the view can be pinned to another repository of the shown space (a worktree,
 // or one repository of a folder that holds several). Per space; null follows the focused pane.
@@ -150,7 +155,7 @@ export default class Changes extends View {
     this.restore(at.space);
     const space = spaces().find((s) => s.active), on = space?.machine ?? null;
     if (tick && on && Date.now() - (this.placesBy.get(at.space)?.tried ?? -Infinity) < 60000) return;
-    if (!(top || at.cwd) || this.finding) return;
+    if (!(top || at.cwd) || this.finding || isChecking()) return;
     this.finding = true; this.stale = false; // this scan is the look that was asked for
     const started = Date.now();
     const trees = (shared("project-agent.worktrees") ?? {})[at.space] ?? [];
@@ -411,7 +416,7 @@ export default class Changes extends View {
       this.context = context; this.root = null; this.files = []; this.open = null;
       this.setLines([]); this.message = ""; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.closed = false; this.limited = false;
     }
-    if (!cwd) return;
+    if (!cwd || isChecking()) return;
     this.loading = true;
     cx.spawn(async (cx) => {
       try {

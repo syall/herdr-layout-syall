@@ -40,7 +40,8 @@ The mods are clones of Herdr 0.1.15's shipped mods and do not get its updates.
 real data. It also runs `init()` for real and leaves any process init starts running (a `knownAgents()`
 login-shell probe, `exec()`, `hc()`), so init starts none while `checking()` is true (each mod reads it as
 `herdr.checking?.()`: Herdr before 0.1.16 has no such export).
-`smoke/run.mjs` runs an installed mod's render code under Node with a stubbed UI kit and fake spaces, agents, tasks and repositories:
+`smoke/run.mjs` runs an installed mod's render code under Node with a stubbed UI kit and fake spaces,
+agents, tasks and repositories, and checks that no mod starts a process while `checking()` is true:
 
 ```sh
 cd smoke && for m in my-changes my-agent-picker my-files project-agent my-tabs my-menu my-pane my-spaces my-new-menu space-home; do node run.mjs $m; done
